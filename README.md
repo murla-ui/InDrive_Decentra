@@ -57,6 +57,34 @@ python route_endpoints.py /path/to/csv --no-heatmap
 <pre><code>randomized_id,start_lat,start_lng,end_lat,end_lng</code></pre>
 
 
+  <h3>Быстрый старт: <code>route_optimization.ipynb</code></h3>
+  <ol>
+    <li>Откройте ноутбук <code>route_optimization.ipynb</code>.</li>
+    <li>Выполните ячейку с установкой зависимостей (или команды выше).</li>
+    <li>Запустите все ячейки:
+      <ul>
+        <li>клик по карте: 1-й клик — <strong>Start</strong>, 2-й — <strong>End</strong> (<em>3-й — сброс</em>);</li>
+        <li>кнопка <strong>Open route in new window</strong> сохранит <code>fastest_route.html</code>.</li>
+      </ul>
+    </li>
+  </ol>
+
+  <h4>Входные данные (кратко)</h4>
+  <ul>
+    <li><strong><code>final_speed.csv</code></strong> — колонки: <code>lat</code>, <code>lng</code>, <code>spd</code>, <code>azm</code>, <code>randomized_id</code><br>
+      <small>(если средняя <code>spd</code> &gt; 15 — считается km/h и конвертируется в m/s)</small>
+    </li>
+    <li><strong><code>direction_clusters.csv</code></strong> — из шага агрегации (или прилагается):<br>
+      координаты — <code>centroid_lat</code> | <code>lat</code>, <code>centroid_lng</code> | <code>lng</code>;<br>
+      скорость — <code>avg_spd_ms</code> | <code>spd_ms</code>; направление — <code>avg_azm</code> | <code>azm</code>; опц. <code>cnt</code>.
+    </li>
+  </ul>
+  <h4>Выходы</h4>
+  <ul>
+    <li><code>fastest_route.html</code> — экспорт маршрута (цвет сегмента = нормированная скорость).</li>
+    <li>(опционально, если включено превью векторов) <code>vectors_direction_clusters.html</code>.</li>
+  </ul>
+
 ## Дальнейшие шаги 
 
 
