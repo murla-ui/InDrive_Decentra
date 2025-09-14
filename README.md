@@ -34,6 +34,28 @@
 ```
 python route_endpoints.py /path/to/csv --no-heatmap 
 ```
+<h3>Что делает скрипт</h3>
+
+<ul>
+  <li>Читает CSV с GPS-точками: <code>randomized_id</code>, <code>lat</code>, <code>lng</code> <em>(опционально: <code>spd</code> — скорость, <code>azm</code> — азимут)</em>.</li>
+  <li>Для каждого <code>randomized_id</code>:
+    <ul>
+      <li>Переводит координаты в локальные метры (корректная евклидова метрика).</li>
+      <li>Строит kNN-граф → минимальное остовное дерево (MST).</li>
+      <li>Находит <strong>диаметр MST</strong> — две наиболее удалённые точки по кратчайшему пути (геометрические концы «верёвки»).</li>
+      <li>По кратчайшему пути между концами строит «хребет» маршрута и различает <strong>Start/End</strong>:
+        <ul>
+          <li>если есть <code>azm</code> — по совпадению азимута с направлением хребта у концов;</li>
+          <li>иначе — <em>fallback</em> по скорости <code>spd</code> <em>(старт = более «медленный» конец)</em>.</li>
+        </ul>
+      </li>
+    </ul>
+  </li>
+  <li>Сохраняет таблицу концов в CSV:</li>
+</ul>
+
+<pre><code>randomized_id,start_lat,start_lng,end_lat,end_lng</code></pre>
+
 
 ## Дальнейшие шаги 
 
