@@ -495,7 +495,9 @@
   });}
 
   // ---------- ROUTING over direction clusters ----------
-  const ROUTE_NEIGHBORS=8, ROUTE_MAX_DIST_M=400, MIN_SPEED_KMH=5, ALIGN_BASE=0.25, ALIGN_GAIN=0.75;
+  // >>> Enforced rule: only near (≤150 m) and forward-oriented (turn ≤60°) edges <<<
+  const ROUTE_NEIGHBORS=8, ROUTE_MAX_DIST_M=150, MIN_SPEED_KMH=5, ALIGN_BASE=0.25, ALIGN_GAIN=0.75;
+  const MAX_TURN_DEG = 60;
   let G=null, routeWeightMode='time';
   function buildRoutingGraph(){
     if (!dirRaw.length) return null;
@@ -510,9 +512,14 @@
       }
       arr.sort((u,v)=>u.dist-v.dist);
       const outs=[];
-      for (const {j,dist} of arr.slice(0,ROUTE_NEIGHBORS)){
-        const b=nodes[j], brg=bearingAB(a.lng,a.lat,b.lng,b.lat), brg360=((brg%360)+360)%360;
-        const ddeg=angleDiff(a.avgAzm, brg360), align=Math.max(0, Math.cos(toRad(ddeg)));
+      for (const {j,dist} of arr){
+        if (outs.length >= ROUTE_NEIGHBORS) break;
+        const b=nodes[j];
+        const brg=bearingAB(a.lng,a.lat,b.lng,b.lat);
+        const brg360=((brg%360)+360)%360;
+        const ddeg=angleDiff(a.avgAzm, brg360);
+        if (ddeg > MAX_TURN_DEG) continue; // hard-stop: only forward-oriented edges
+        const align=Math.max(0, Math.cos(toRad(ddeg)));
         const effKmh=Math.max(MIN_SPEED_KMH, a.avgSpd*(ALIGN_BASE+ALIGN_GAIN*align));
         const time_s = dist/(effKmh*(1000/3600));
         outs.push({to:j, dist_m:dist, time_s, eff_kmh:effKmh});
@@ -742,7 +749,6 @@
         getFillColor:[selectedOrigin]
       },
       onHover: info => { map.getCanvas().style.cursor = info?.object ? 'pointer' : ''; },
-            // In odOriginLayer() onClick handler:
       onClick: info => {
         if (!info?.object) return;
         const ohex = info.object.hex;
@@ -750,7 +756,7 @@
         if (ohex === selectedOrigin) {
           selectedOrigin = null; currentCountsMap = new Map(); currentVmax = 0;
           odSelOrigin.textContent = '—'; odSelTrips.textContent = '—';
-          recomputeOdLabels();  // ← add
+          recomputeOdLabels();
           overlay.setProps({ layers: layersFor('od', currentType) });
           return;
         }
@@ -764,7 +770,7 @@
         odSelOrigin.textContent = ohex; odSelTrips.textContent = total.toLocaleString();
         odCounts.textContent = `Destinations from selection: ${dm.size.toLocaleString()} | vmax: ${currentVmax}`;
 
-        recomputeOdLabels();  // ← add
+        recomputeOdLabels();
         overlay.setProps({ layers: layersFor('od', currentType) });
       }
 
@@ -774,10 +780,9 @@
 function odDestLabelsLayer(){
   return new deck.TextLayer({
     id: 'od-dest-labels',
-    data: odLabelData,              // ← stable array, not destGrid
+    data: odLabelData,
     pickable: false,
 
-    // Ensure glyph atlas has digits available regardless of first render
     characterSet: '0123456789',
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace',
 
@@ -788,14 +793,12 @@ function odDestLabelsLayer(){
     getTextAnchor: 'middle',
     getAlignmentBaseline: 'center',
 
-    // Improve readability on light hexes
     background: true,
     getBackgroundColor: [0, 0, 0, 160],
     getColor: [255, 255, 255, 255],
 
     parameters: { depthTest: false },
 
-    // Trigger re-layout whenever we rebuild odLabelData
     updateTriggers: {
       getText: [odLabelVersion],
       getSize: [odLabelVersion]
