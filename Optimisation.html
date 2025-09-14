@@ -3,11 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Business map</title>
+  <title>Route optimisation</title>
 
   <!-- MapLibre (CSS + JS) -->
   <link href="https://unpkg.com/maplibre-gl@3.5.2/dist/maplibre-gl.css" rel="stylesheet" />
   <script src="https://unpkg.com/maplibre-gl@3.5.2/dist/maplibre-gl.js"></script>
+
+  <!-- IMPORTANT: deck.gl H3 layer requires h3-js v3 to be loaded BEFORE deck.gl -->
+  <script src="https://unpkg.com/h3-js@3.7.2/dist/h3-js.umd.js"></script>
 
   <!-- Exactly one deck.gl bundle (global `deck`) -->
   <script src="https://unpkg.com/deck.gl@8.8.27/dist.min.js"></script>
@@ -17,82 +20,111 @@
   <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
 
   <style>
+    .pill_{
+      font-size:.75rem; font-weight:800; padding:.25rem .55rem; border-radius:999px;
+      background: var(--indrive); color:#ffffff; border:1px solid rgba(255, 255, 255, 1
+      );
+    }
     :root{
-      --peach:#E5BA83; /* warm peach */
-      --teal:#376C8A;  /* deep teal */
-      --red:#D64550;   /* palette red */
-      --bg:#0b0f13;    /* darker app bg */
-      --panel:#12181e; /* darker side panel */
-      --text:#e6edf3;
-      --muted:#9aa4af;
-      --good:#008A3E;
+      --peach:#E5BA83; --teal:#376C8A; --red:#D64550; --bg:#0b0f13; --panel:#12181e;
+      --text:#e6edf3; --muted:#9aa4af; --good:#008A3E; --accent:#C0F11C;
     }
     html,body,#app{height:100%;margin:0}
     #app{
-      display:grid;grid-template-columns:300px 1fr;
-      background:var(--bg);color:var(--text);
+      display:grid;grid-template-columns:300px 1fr;background:var(--bg);color:var(--text);
       font:14px/1.4 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial
     }
-    #sidebar{background:var(--panel);border-right:1px solid #1f2730;display:flex;flex-direction:column}
-    header{padding:14px 16px;border-bottom:1px solid #1f2730}
-    header h1{font-size:16px;margin:0 0 6px 0;font-weight:700}
+    #sidebar{background:var(--panel);border-right:1px solid #1f2730;display:flex;flex-direction:column;min-width:300px}
+    header{padding:10px 14px;border-bottom:1px solid #1f2730}
+    header h1{font-size:16px;margin:0 0 4px 0;font-weight:700}
     header .sub{color:var(--muted);font-size:12px}
-    #controls{padding:12px 14px;overflow:auto}
-    .group{margin-bottom:14px}
-    .group h3{font-size:13px;margin:0 0 8px 0;color:#c7d1db}
-    label.row{display:flex;align-items:center;gap:10px;margin:8px 0}
+
+    /* NO-SCROLL: controls fill remaining height, never scroll */
+    #controls{padding:10px 12px;flex:1 1 auto;overflow:hidden}
+
+    .group{margin:0 0 10px 0}
+    .group h3{font-size:13px;margin:0 0 6px 0;color:#c7d1db}
+    label.row{display:flex;align-items:center;gap:10px;margin:6px 0;white-space:normal}
     label.row input[type="radio"]{accent-color:var(--teal)}
     .hint{color:var(--muted);font-size:12px}
     .legend{display:flex;flex-wrap:wrap;gap:6px}
     .pill{display:inline-flex;align-items:center;gap:6px;padding:6px 8px;border-radius:10px;background:#0f151b;border:1px solid #1f2a33}
     #map{position:relative}
     #mapContainer{position:relative;height:100%}
-    footer{padding:10px 14px;border-top:1px solid #1f2730;color:var(--muted);font-size:12px}
-    footer a{color:var(--peach);text-decoration:none}
+    footer{padding:8px 12px;border-top:1px solid #1f2730;color:var(--muted);font-size:12px}
 
     /* Loading overlay */
-    #loading{
-      position:fixed; inset:0; display:none;
-      align-items:center; justify-content:center;
-      background:rgba(11,15,19,0.6);
-      backdrop-filter: blur(2px);
-      z-index:9999;
-      pointer-events:all;
-    }
-    #loading .panel{
-      display:flex; align-items:center; gap:12px;
-      background:#0f151b; border:1px solid #1f2a33; border-radius:12px;
-      padding:14px 16px; box-shadow:0 10px 30px rgba(0,0,0,0.4);
-    }
-    #loading .spinner{
-      width:28px; height:28px; border-radius:50%;
-      border:3px solid #24303a; border-top-color:var(--peach);
-      animation:spin 0.9s linear infinite;
-    }
+    #loading{position:fixed; inset:0; display:none; align-items:center; justify-content:center;
+      background:rgba(11,15,19,0.6); backdrop-filter: blur(2px); z-index:9999; pointer-events:all;}
+    #loading .panel{display:flex; align-items:center; gap:12px; background:#0f151b; border:1px solid #1f2a33;
+      border-radius:12px; padding:14px 16px; box-shadow:0 10px 30px rgba(0,0,0,0.4);}
+    #loading .spinner{width:28px; height:28px; border-radius:50%; border:3px solid #24303a; border-top-color:var(--peach);
+      animation:spin 0.9s linear infinite;}
     #loading .msg{font-weight:600; color:var(--text)}
     @keyframes spin {to{transform:rotate(360deg)}}
     fieldset{border:0;padding:0;margin:0}
     fieldset[disabled]{opacity:.55}
+
+    /* Route panel */
+    #routePanel[hidden]{display:none}
+    #routeStats{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+    #routeStats .pill strong{font-weight:800}
+    .btn{appearance:none;border:1px solid #26313a;background:#0f151b;color:var(--text);
+      padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer}
+    .btn:disabled{opacity:.6;cursor:not-allowed}
+    .btn.danger{border-color:#3b2326;color:#ffb2b7}
+    .btn.accent{border-color:#334920}
+
+    /* OD panel */
+    #odPanel[hidden]{display:none}
+    .grid{display:grid;grid-template-columns:140px 1fr;gap:6px 8px;align-items:center}
+    .grid input, .grid select{width:100%;padding:6px;background:#0f151b;border:1px solid #26313a;border-radius:8px;color:var(--text)}
+    .grid button{padding:6px 10px;border:1px solid #26313a;background:#0f151b;color:var(--text);border-radius:8px;cursor:pointer}
+    .muted{color:var(--muted)} .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace}
+
+    /* ---------- Compact mode for Route/OD (no scroll, fits content) ---------- */
+    body.compact header{padding:8px 10px}
+    body.compact footer{padding:6px 10px}
+    body.compact #controls{padding:8px 10px}
+    body.compact #sidebar{font-size:13px}
+    body.compact .group{margin-bottom:8px}
+    body.compact .hint{display:none} /* save vertical space */
+    body.compact .pill{padding:4px 6px}
+    body.compact .grid{gap:5px 8px}
+    body.compact .grid input, body.compact .grid select{padding:5px}
+    body.compact .btn{padding:5px 8px}
+
+    /* Extra compact if needed */
+    body.compact2 #sidebar{font-size:12px}
+    body.compact2 header h1{font-size:15px}
+    body.compact2 .group h3{font-size:12px}
+     .card{box-shadow:0 1px 6px rgba(0,0,0,0.08)}
   </style>
 </head>
 <body>
 <div id="app">
   <aside id="sidebar">
     <header>
-      <h1>Business Map</h1>
+      <h1>Route Optimisation Map</h1>
+<a class="card" href="https://murla-ui.github.io/InDrive_Decentra/" style="text-decoration:none">
+  <span class="pill_">Main menu</span>
+</a>
     </header>
 
     <div id="controls">
-      <div class="group">
+      <div class="group" id="chooseGroup">
         <h3>Choose a view</h3>
         <label class="row"><input type="radio" name="mode" value="all" checked>All points density (no filters)</label>
+        
+        <label class="row"><input type="radio" name="mode" value="direction">Direction clusters</label>
+        <label class="row"><input type="radio" name="mode" value="route">Route (fastest via dir clusters)</label>
+        <label class="row"><input type="radio" name="mode" value="od">OD flows (origin → destination)</label>
         <label class="row"><input type="radio" name="mode" value="pickup">Start density (pickups)</label>
         <label class="row"><input type="radio" name="mode" value="dest">End density (destinations)</label>
-        <label class="row"><input type="radio" name="mode" value="direction">Direction clusters</label>
         <div class="hint">Only one view is visible at a time.</div>
       </div>
 
-      <div class="group">
+      <div class="group" id="layerGroup">
         <h3>Layer type</h3>
         <fieldset id="layerType">
           <label class="row"><input type="radio" name="layertype" value="heat" checked>Heatmap</label>
@@ -101,7 +133,88 @@
         </fieldset>
       </div>
 
-      <div class="group">
+      <!-- Route controls -->
+      <div id="routePanel" class="group" hidden>
+        <h3>Route planner</h3>
+        <label class="row"><input type="radio" name="routePlace" value="start" checked>Click map to set <b>Start</b></label>
+        <label class="row"><input type="radio" name="routePlace" value="end">Click map to set <b>End</b></label>
+        <div style="display:flex;gap:8px;margin:8px 0;">
+          <button id="btnClearRoute" class="btn danger" type="button">Clear</button>
+          <button id="btnRecalc" class="btn accent" type="button" disabled>Recalculate</button>
+        </div>
+        <div class="hint">Routing uses <code>direction_clusters.csv</code> average speeds and azimuths. It prefers links aligned with local direction. <b>Start/End must be inside the grey 2 km circle.</b></div>
+
+        <div class="group" style="margin-top:6px">
+          <h3>Optimization</h3>
+          <label class="row"><input type="radio" name="routeWeight" value="time" checked>Min time</label>
+          <label class="row"><input type="radio" name="routeWeight" value="distance">Min km</label>
+        </div>
+
+        <div id="routeStats">
+          <span class="pill">Start: <span id="startTxt">—</span></span>
+          <span class="pill">End: <span id="endTxt">—</span></span>
+          <span class="pill"><strong>ETA:</strong> <span id="etaTxt">—</span></span>
+          <span class="pill"><strong>Distance:</strong> <span id="distTxt">—</span></span>
+        </div>
+
+        <!-- Pricing panel -->
+        <div id="pricingPanel" class="group" style="margin-top:8px">
+          <h3>Pricing (KZT)</h3>
+          <div class="grid">
+            <label for="fareBase">Base fare</label>
+            <input id="fareBase" type="number" value="350" step="10" min="0"/>
+
+            <label for="farePerKm">Per km</label>
+            <input id="farePerKm" type="number" value="120" step="5" min="0"/>
+
+            <label for="farePerMin">Per min</label>
+            <input id="farePerMin" type="number" value="20" step="1" min="0"/>
+
+            <label for="demandRadius">Demand radius (m)</label>
+            <input id="demandRadius" type="number" value="300" step="25" min="50"/>
+
+            <label for="demandWeight">Demand weight (max add-on)</label>
+            <input id="demandWeight" type="number" value="400" step="10" min="0"/>
+          </div>
+
+          <div class="pill" style="margin-top:6px">
+            <strong>Demand @ dest:</strong>&nbsp;
+            <span id="demandCount">—</span> starts in radius&nbsp;·&nbsp;norm <span id="demandNorm">—</span>&nbsp;·&nbsp;add-on <span id="demandAddon">—</span>
+          </div>
+          <div class="pill" style="margin-top:6px"><strong>Price:</strong> <span id="priceTxt">—</span></div>
+          <div class="hint" id="pricingHint" style="margin-top:6px">
+            Formula: base + (km·per_km) + (min·per_min) + (1 − norm)·demand_weight. norm is demand within radius scaled by dataset-derived clip (≈95th percentile).
+          </div>
+        </div>
+      </div>
+
+      <!-- OD Explorer controls -->
+      <div id="odPanel" class="group" hidden>
+        <h3>OD Explorer</h3>
+        <div class="grid">
+          <label for="odH3res">H3 res</label>
+          <select id="odH3res">
+            <option value="7">7 (coarser)</option>
+            <option value="8">8</option>
+            <option value="9">9</option>
+            <option value="10" selected>10 (finer)</option>
+          </select>
+        </div>
+
+        <div style="margin-top:8px">
+          <div class="hint">Click any outlined origin hex to select; destination hexes recolor by frequency from that origin. Click again to deselect.</div>
+          <div id="odStatus" class="hint" style="margin-top:4px">—</div>
+        </div>
+
+        <div style="margin-top:8px">
+          <div><b>Selected origin:</b> <span id="odSelOrigin" class="mono">—</span></div>
+          <div><b>Outgoing trips:</b> <span id="odSelTrips">—</span></div>
+          <div class="hint" id="odCounts">—</div>
+        </div>
+      </div>
+
+
+      <div class="group" id="legendGroup">
         <h3>Legend</h3>
         <div class="legend" id="legend">
           <span class="pill" id="legendText">Heatmap shows density (no filters).</span>
@@ -109,9 +222,7 @@
       </div>
     </div>
 
-    <footer>
-      Built by ElArNa.
-    </footer>
+    <footer>Built by ElArNa.</footer>
   </aside>
 
   <section id="map">
@@ -130,33 +241,89 @@
 <script>
 (async function(){
   // ---------- Helpers ----------
-  const $ = (sel)=>document.querySelector(sel);
+  const $  = (sel)=>document.querySelector(sel);
+  const $$ = (sel)=>[...document.querySelectorAll(sel)];
   const nextFrame = () => new Promise(r => requestAnimationFrame(()=>r()));
   const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
   function showLoader(msg='Loading…'){ const el=$('#loading'),txt=$('#loadingText'); if(txt) txt.textContent=msg; if(el) el.style.display='flex'; }
   function hideLoader(){ const el=$('#loading'); if(el) el.style.display='none'; }
+
+  // Sidebar fitting (no-scroll for Route/OD)
+  const layerGroup  = $('#layerGroup');
+  const legendGroup = $('#legendGroup');
+  const controlsEl  = $('#controls');
+  function applyCompactClasses(mode){
+    const isCompact = (mode==='route' || mode==='od');
+    document.body.classList.toggle('compact', isCompact);
+    document.body.classList.remove('compact2');
+
+    // Hide non-essential groups in Route/OD views
+    if (layerGroup)  layerGroup.style.display  = isCompact ? 'none' : '';
+    if (legendGroup) legendGroup.style.display = isCompact ? 'none' : '';
+
+    // After styles settle, if still overflowing, go extra small
+    requestAnimationFrame(()=>{
+      if (isCompact && controlsEl && controlsEl.scrollHeight > controlsEl.clientHeight){
+        document.body.classList.add('compact2');
+      }
+    });
+  }
+  window.addEventListener('resize', ()=>applyCompactClasses(currentMode));
+
   showLoader('Loading data…');
 
   // ---------- Config & UI refs ----------
   const CSV_URL_SPEED   = 'final_speed.csv';
   const CSV_URL_DIR     = 'direction_clusters.csv';
   const CSV_URL_ENDPTS  = 'route_endpoints.csv';
-  const HEX_RADIUS_M    = 50;         // for hexbins
+  const HEX_RADIUS_M    = 50;
 
-  // Arrow visuals (direction mode) — fixed length 40 m
-  const ARROW_LEN_M     = 40;       // fixed shaft length
-  const HEAD_FRACTION   = 0.4;      // arrowhead length as a fraction of shaft
-  const HEAD_OFFSET_DEG = 150;      // head arms ± this from reverse direction
+  // Route UI
+  const routePanel = $('#routePanel');
+  const routePlaceInputs = $$('input[name="routePlace"]');
+  const btnClearRoute = $('#btnClearRoute');
+  const btnRecalc = $('#btnRecalc');
+  const startTxt = $('#startTxt');
+  const endTxt = $('#endTxt');
+  const etaTxt = $('#etaTxt');
+  const distTxt = $('#distTxt');
 
-  const modeInputs = document.querySelectorAll('input[name="mode"]');
-  const typeInputs = document.querySelectorAll('input[name="layertype"]');
+  // Pricing UI
+  const fareBase    = $('#fareBase');
+  const farePerKm   = $('#farePerKm');
+  const farePerMin  = $('#farePerMin');
+  const demandRadius= $('#demandRadius');
+  const demandWeight= $('#demandWeight');
+  const demandCountEl = $('#demandCount');
+  const demandNormEl  = $('#demandNorm');
+  const demandAddonEl = $('#demandAddon');
+  const priceTxt = $('#priceTxt');
+
+  // Mode & layer type
+  const modeInputs = $$('input[name="mode"]');
+  const typeInputs = $$('input[name="layertype"]');
   const layerTypeFieldset = $('#layerType');
   const legendText = $('#legendText');
 
-  // ---------- CSV loader ----------
+  // OD UI
+  const odPanel = $('#odPanel');
+  const odH3res = $('#odH3res');
+  const odStatus = $('#odStatus');
+  const odSelOrigin = $('#odSelOrigin');
+  const odSelTrips = $('#odSelTrips');
+  const odCounts = $('#odCounts');
+
+  // Selection circle (for route view)
+  const CIRCLE_CENTER = [71.41642, 51.08925]; // [lng, lat]
+  const CIRCLE_RADIUS_M = 1500;
+  const circleGeo = turf.circle(CIRCLE_CENTER, CIRCLE_RADIUS_M/1000, {steps:128, units:'kilometers'});
+  const SELECT_CIRCLE = [{ polygon: circleGeo.geometry.coordinates[0] }];
+  const CIRCLE_BBOX = turf.bbox(circleGeo);
+
+  // CSV loader
   async function loadCSV(url){
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`Failed to fetch ${url}`);
+    const res = await fetch(url, {cache:'no-store'});
+    if (!res.ok) throw new Error(`Failed to fetch ${url} — HTTP ${res.status}`);
     const text = await res.text();
     return Papa.parse(text, {header:true, dynamicTyping:true, skipEmptyLines:true}).data;
   }
@@ -164,13 +331,13 @@
 
   // Load datasets
   const [rawSpeed, rawDir, rawEndpoints] = await Promise.all([
-    loadCSV(CSV_URL_SPEED),
-    loadCSV(CSV_URL_DIR).catch(()=>[]),   // direction is optional
-    loadCSV(CSV_URL_ENDPTS)               // endpoints expected
+    loadCSV(CSV_URL_SPEED).catch(()=>[]),
+    loadCSV(CSV_URL_DIR).catch(()=>[]),
+    loadCSV(CSV_URL_ENDPTS)
   ]);
 
   // Normalize speeds (all points)
-  const speedAll = rawSpeed.map(r=>({
+  const speedAll = (rawSpeed||[]).map(r=>({
     randomized_id: r.randomized_id ?? r.rand_id ?? r.id,
     lat: toNum(r.lat),
     lng: toNum(r.lng),
@@ -180,27 +347,25 @@
   // Normalize endpoints
   const endpoints = (rawEndpoints || []).map(r=>({
     randomized_id: r.randomized_id ?? r.id ?? r.route_id,
-    start_lat: toNum(r.start_lat),
-    start_lng: toNum(r.start_lng),
-    end_lat:   toNum(r.end_lat),
-    end_lng:   toNum(r.end_lng)
+    start_lat: toNum(r.start_lat ?? r.o_lat ?? r.origin_lat ?? r.from_lat),
+    start_lng: toNum(r.start_lng ?? r.o_lng ?? r.o_lon ?? r.origin_lng ?? r.origin_lon ?? r.from_lng ?? r.from_lon),
+    end_lat:   toNum(r.end_lat   ?? r.d_lat ?? r.dest_lat  ?? r.to_lat),
+    end_lng:   toNum(r.end_lng   ?? r.d_lng ?? r.d_lon     ?? r.dest_lng ?? r.dest_lon ?? r.to_lng ?? r.to_lon)
   }));
-  const startPoints = endpoints
-    .filter(e=>e.start_lat!=null && e.start_lng!=null)
-    .map(e=>({randomized_id:e.randomized_id, lat:e.start_lat, lng:e.start_lng}));
-  const endPoints = endpoints
-    .filter(e=>e.end_lat!=null && e.end_lng!=null)
-    .map(e=>({randomized_id:e.randomized_id, lat:e.end_lat, lng:e.end_lng}));
+
+  const startPoints = endpoints.filter(e=>e.start_lat!=null && e.start_lng!=null)
+                               .map(e=>({randomized_id:e.randomized_id, lat:e.start_lat, lng:e.start_lng}));
+  const endPoints   = endpoints.filter(e=>e.end_lat!=null && e.end_lng!=null)
+                               .map(e=>({randomized_id:e.randomized_id, lat:e.end_lat, lng:e.end_lng}));
 
   // Normalize direction clusters
   const dirRaw = (rawDir || []).map(r=>({
     lat: toNum(r.centroid_lat ?? r.lat ?? r.latitude),
     lng: toNum(r.centroid_lng ?? r.lng ?? r.lon ?? r.longitude),
     avgSpd: toNum(r.avg_spd_kmh ?? r.spd ?? r.speed),
-    avgAzm: toNum(r.avg_azm ?? r.azm ?? r.bearing) // degrees [0..360)
+    avgAzm: toNum(r.avg_azm ?? r.azm ?? r.bearing)
   })).filter(d=>d.lat!=null && d.lng!=null && d.avgAzm!=null);
 
-  // Extents for color scaling (direction view)
   const spdVals = dirRaw.map(d=>d.avgSpd).filter(v=>v!=null && Number.isFinite(v));
   const SPD_MIN = spdVals.length ? Math.min(...spdVals) : 0;
   const SPD_MAX = spdVals.length ? Math.max(...spdVals) : 1;
@@ -208,12 +373,7 @@
   // ---------- small geo helpers ----------
   function computeBounds(points){
     let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
-    for (const p of points){
-      if (p.lng<minX) minX=p.lng;
-      if (p.lng>maxX) maxX=p.lng;
-      if (p.lat<minY) minY=p.lat;
-      if (p.lat>maxY) maxY=p.lat;
-    }
+    for (const p of points){ if (p.lng<minX) minX=p.lng; if (p.lng>maxX) maxX=p.lng; if (p.lat<minY) minY=p.lat; if (p.lat>maxY) maxY=p.lat; }
     return {minX, minY, maxX, maxY};
   }
   function fitTo(points){
@@ -221,11 +381,23 @@
     const b = computeBounds(points);
     map.fitBounds([[b.minX,b.minY],[b.maxX,b.maxY]], {padding: 40, duration: 0});
   }
-  // destination using turf (distance in meters, bearing in degrees)
   function dest(lng, lat, distance_m, bearing_deg){
     const pt = turf.point([lng, lat]);
     const out = turf.destination(pt, distance_m/1000, bearing_deg, {units:'kilometers'});
     return out.geometry.coordinates; // [lng, lat]
+  }
+  const toRad = (deg)=>deg*Math.PI/180;
+  const angleDiff = (a,b)=>{ let d = ((a - b) % 360 + 360) % 360; if (d > 180) d = 360 - d; return d; };
+  function metersBetween(aLng,aLat,bLng,bLat){
+    return turf.distance([aLng,aLat],[bLng,bLat],{units:'kilometers'})*1000;
+  }
+  function bearingAB(aLng,aLat,bLng,bLat){
+    return turf.bearing([aLng,aLat],[bLng,bLat]);
+  }
+  function insideSelectCircle(ll){
+    const [lng, lat] = ll;
+    const d_m = turf.distance([lng,lat], CIRCLE_CENTER, {units:'kilometers'}) * 1000;
+    return d_m <= CIRCLE_RADIUS_M;
   }
 
   // ---------- MapLibre (dark raster) ----------
@@ -252,9 +424,7 @@
       glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf'
     },
     center: centerGuess,
-    zoom: 11,
-    pitch: 0,
-    bearing: 0
+    zoom: 11
   });
   map.addControl(new maplibregl.NavigationControl({visualizePitch: true}), 'top-right');
 
@@ -263,269 +433,614 @@
   map.addControl(overlay);
 
   // ---------- Color ranges ----------
-  // Heat/hex: bright yellow -> bright red (low counts slightly visible)
   const HEAT_COLOR_RANGE = [
-    [255,255,180, 10],
-    [255,255,180, 40],
-    [255,255,180,100],
-    [255,255,180,140],
-    [255,245,120,180],
-    [255,210, 70,210],
-    [255,140, 40,235],
-    [255, 40, 30,255]
+    [255,255,180, 10],[255,255,180, 40],[255,255,180,100],[255,255,180,140],
+    [255,245,120,180],[255,210, 70,210],[255,140, 40,235],[255, 40, 30,255]
   ];
 
-  // Direction: BRIGHT red -> BRIGHT yellow -> BRIGHT green
-  const DIR_RED    = [255,  60,  60];
-  const DIR_YELLOW = [255, 255,   0];
-  const DIR_GREEN  = [ 60, 255, 120];
-
+  const DIR_RED=[255,60,60], DIR_YELLOW=[255,255,0], DIR_GREEN=[60,255,120];
   function lerp(a,b,t){ return Math.round(a + (b-a)*t); }
-
   function colorForSpeed(speed){
     const tRaw = (speed - SPD_MIN) / ((SPD_MAX - SPD_MIN) || 1);
     const t = Math.max(0, Math.min(1, tRaw));
     if (t <= 0.5){
-      // red -> yellow
-      const s = t * 2;
-      return [
-        lerp(DIR_RED[0],    DIR_YELLOW[0], s),
-        lerp(DIR_RED[1],    DIR_YELLOW[1], s),
-        lerp(DIR_RED[2],    DIR_YELLOW[2], s),
-        255
-      ];
+      const s = t*2; return [lerp(DIR_RED[0],DIR_YELLOW[0],s),lerp(DIR_RED[1],DIR_YELLOW[1],s),lerp(DIR_RED[2],DIR_YELLOW[2],s),255];
     } else {
-      // yellow -> green
-      const s = (t - 0.5) * 2;
-      return [
-        lerp(DIR_YELLOW[0], DIR_GREEN[0], s),
-        lerp(DIR_YELLOW[1], DIR_GREEN[1], s),
-        lerp(DIR_YELLOW[2], DIR_GREEN[2], s),
-        255
-      ];
+      const s = (t-0.5)*2; return [lerp(DIR_YELLOW[0],DIR_GREEN[0],s),lerp(DIR_YELLOW[1],DIR_GREEN[1],s),lerp(DIR_YELLOW[2],DIR_GREEN[2],s),255];
     }
   }
 
   // ---------- Layer factories ----------
   function makeHeatLayer(id, data){
     return new deck.HeatmapLayer({
-      id,
-      data,
-      getPosition: d=>[d.lng,d.lat],
-      getWeight: _=>1,
-      radiusPixels: 30,
-      intensity: 1.1,
-      threshold: 0.005,
-      colorRange: HEAT_COLOR_RANGE,
-      pickable: false
+      id, data, getPosition:d=>[d.lng,d.lat], getWeight:_=>1, radiusPixels:30, intensity:1.1, threshold:0.005,
+      colorRange:HEAT_COLOR_RANGE, pickable:false
     });
   }
   function makeHexLayer(id, data){
     return new deck.HexagonLayer({
-      id,
-      data,
-      getPosition: d=>[d.lng, d.lat],
-      radius: HEX_RADIUS_M,
-      colorAggregation: 'SUM',
-      getColorWeight: _=>1,
-      colorRange: HEAT_COLOR_RANGE,
-      coverage: 0.9,
-      extruded: false,
-      elevationScale: 0,
-      pickable: true,
-      autoHighlight: true
+      id, data, getPosition:d=>[d.lng,d.lat], radius:HEX_RADIUS_M,
+      colorAggregation:'SUM', getColorWeight:_=>1, colorRange:HEAT_COLOR_RANGE,
+      coverage:0.9, extruded:false, elevationScale:0, pickable:true, autoHighlight:true
     });
   }
-
-  // Existing "all points" quick creators
   const heatAll = ()=> makeHeatLayer('heat-all', speedAll);
   const hexAll  = ()=> makeHexLayer('hex-all', speedAll);
-
-  // Pickup / Destination creators
   const heatPickup = ()=> makeHeatLayer('heat-pickup', startPoints);
   const hexPickup  = ()=> makeHexLayer('hex-pickup', startPoints);
-
   const heatDest   = ()=> makeHeatLayer('heat-dest', endPoints);
   const hexDest    = ()=> makeHexLayer('hex-dest', endPoints);
 
-  // ---------- Direction clusters prep (fixed arrow length) ----------
+  // ---------- Direction arrows ----------
+  const ARROW_LEN_M=40, HEAD_FRACTION=0.4, HEAD_OFFSET_DEG=150;
   const dirData = dirRaw.map(d=>{
-    const headLen = Math.max(4, ARROW_LEN_M * HEAD_FRACTION);
-    const [lng2, lat2] = dest(d.lng, d.lat, ARROW_LEN_M, d.avgAzm ?? 0);
+    const headLen = Math.max(4, ARROW_LEN_M*HEAD_FRACTION);
+    const [lng2,lat2]=dest(d.lng,d.lat,ARROW_LEN_M,d.avgAzm??0);
+    const left=(d.avgAzm??0)+HEAD_OFFSET_DEG, right=(d.avgAzm??0)-HEAD_OFFSET_DEG;
+    const [lngL,latL]=dest(lng2,lat2,headLen,left), [lngR,latR]=dest(lng2,lat2,headLen,right);
+    return {...d, path:[[d.lng,d.lat],[lng2,lat2]], head:[[lng2,lat2],[lngL,latL],[lngR,latR]]};
+  });
+  function dirPointsLayer(){ return new deck.ScatterplotLayer({
+    id:'dir-points', data:dirData, getPosition:d=>[d.lng,d.lat], getFillColor:d=>colorForSpeed(d.avgSpd??0),
+    radiusMinPixels:4, radiusMaxPixels:8, stroked:true, lineWidthMinPixels:1, getLineColor:[255,255,255,0], pickable:true,
+    parameters:{depthTest:false}
+  });}
+  function dirPathsLayer(){ return new deck.PathLayer({
+    id:'dir-paths', data:dirData, getPath:d=>d.path, getColor:d=>colorForSpeed(d.avgSpd??0), widthUnits:'pixels', getWidth:3,
+    pickable:true, parameters:{depthTest:false}
+  });}
+  function dirHeadsLayer(){ return new deck.SolidPolygonLayer({
+    id:'dir-heads', data:dirData, getPolygon:d=>d.head, getFillColor:d=>colorForSpeed(d.avgSpd??0),
+    pickable:false, parameters:{depthTest:false}
+  });}
 
-    // Arrow head: ±150° from forward (i.e., ±30° off the reverse)
-    const leftBearing  = (d.avgAzm ?? 0) + HEAD_OFFSET_DEG;
-    const rightBearing = (d.avgAzm ?? 0) - HEAD_OFFSET_DEG;
-    const [lngL, latL] = dest(lng2, lat2, headLen, leftBearing);
-    const [lngR, latR] = dest(lng2, lat2, headLen, rightBearing);
+  // ---------- ROUTING over direction clusters ----------
+  const ROUTE_NEIGHBORS=8, ROUTE_MAX_DIST_M=400, MIN_SPEED_KMH=5, ALIGN_BASE=0.25, ALIGN_GAIN=0.75;
+  let G=null, routeWeightMode='time';
+  function buildRoutingGraph(){
+    if (!dirRaw.length) return null;
+    const nodes = dirRaw.map((d,i)=>({i,lng:d.lng,lat:d.lat,avgSpd:d.avgSpd??30,avgAzm:((d.avgAzm%360)+360)%360}));
+    const N=nodes.length, edges=new Array(N);
+    for (let i=0;i<N;i++){
+      const a=nodes[i], arr=[];
+      for (let j=0;j<N;j++){
+        if (i===j) continue;
+        const b=nodes[j], dist=metersBetween(a.lng,a.lat,b.lng,b.lat);
+        if (dist<=ROUTE_MAX_DIST_M) arr.push({j,dist});
+      }
+      arr.sort((u,v)=>u.dist-v.dist);
+      const outs=[];
+      for (const {j,dist} of arr.slice(0,ROUTE_NEIGHBORS)){
+        const b=nodes[j], brg=bearingAB(a.lng,a.lat,b.lng,b.lat), brg360=((brg%360)+360)%360;
+        const ddeg=angleDiff(a.avgAzm, brg360), align=Math.max(0, Math.cos(toRad(ddeg)));
+        const effKmh=Math.max(MIN_SPEED_KMH, a.avgSpd*(ALIGN_BASE+ALIGN_GAIN*align));
+        const time_s = dist/(effKmh*(1000/3600));
+        outs.push({to:j, dist_m:dist, time_s, eff_kmh:effKmh});
+      }
+      edges[i]=outs;
+    }
+    return {nodes, edges};
+  }
+  function nearestNode(lng,lat){
+    if (!G) return null; const nodes=G.nodes; let best=-1,bestD=Infinity;
+    for (let i=0;i<nodes.length;i++){ const n=nodes[i], d=metersBetween(lng,lat,n.lng,n.lat); if (d<bestD){best=i;bestD=d;} }
+    return {idx:best, dist_m:bestD};
+  }
+  function dijkstra(startIdx, endIdx, weightMode='time'){
+    const N=G.nodes.length, dist=new Float64Array(N); dist.fill(Infinity);
+    const prev=new Int32Array(N); prev.fill(-1); const used=new Uint8Array(N); dist[startIdx]=0;
+    for (let it=0; it<N; it++){
+      let u=-1,best=Infinity; for(let i=0;i<N;i++){ if(!used[i] && dist[i]<best){best=dist[i];u=i;} }
+      if (u===-1 || u===endIdx) break; used[u]=1;
+      for (const e of G.edges[u]){ const v=e.to, w=(weightMode==='distance')?e.dist_m:e.time_s, alt=dist[u]+w;
+        if (alt<dist[v]){ dist[v]=alt; prev[v]=u; } }
+    }
+    if (dist[endIdx]===Infinity) return null;
+    const pathIdx=[]; for (let v=endIdx; v!==-1; v=prev[v]) pathIdx.push(v); pathIdx.reverse();
+    let total_m=0,total_s=0; const segments=[];
+    for (let k=0;k<pathIdx.length-1;k++){ const u=pathIdx[k], v=pathIdx[k+1];
+      const e=G.edges[u].find(x=>x.to===v); if (e){ total_m+=e.dist_m; total_s+=e.time_s;
+        const a=G.nodes[u], b=G.nodes[v]; segments.push({path:[[a.lng,a.lat],[b.lng,b.lat]], eff_kmh:e.eff_kmh});}}
+    const coords = pathIdx.map(i=>[G.nodes[i].lng, G.nodes[i].lat]);
+    return {coords, total_m, total_s, segments};
+  }
+
+  let startLL=null, endLL=null, prevStartLL=null, prevEndLL=null, routeResult=null;
+  function fmtLL(ll){ if(!ll) return '—'; const [lng,lat]=ll; return `${lat.toFixed(5)}, ${lng.toFixed(5)}`; }
+  function fmtDist(m){ if(!isFinite(m)) return '—'; return (m<1000)?`${m.toFixed(0)} m`:`${(m/1000).toFixed(2)} km`; }
+  function fmtETA(s){ if(!isFinite(s)) return '—'; if(s<60) return `${s.toFixed(0)} s`; const m=Math.round(s/60);
+    if(m<60) return `${m} min`; const h=Math.floor(m/60), rm=m%60; return `${h} h ${rm} min`; }
+  function kzt(n){ if(!Number.isFinite(n)) return '—'; return `${Math.round(n).toLocaleString('ru-RU')} KZT`; }
+
+  function updateRouteStatsUI(){
+    startTxt.textContent = fmtLL(startLL); endTxt.textContent = fmtLL(endLL);
+    etaTxt.textContent = routeResult ? fmtETA(routeResult.total_s) : '—';
+    distTxt.textContent = routeResult ? fmtDist(routeResult.total_m) : '—';
+    btnRecalc.disabled = !(startLL && endLL);
+    updatePriceUI(); // keep price in sync
+  }
+
+  function makeMarker(color,label){
+    const el=document.createElement('div'); el.style.width='16px'; el.style.height='16px';
+    el.style.border='2px solid #fff'; el.style.borderRadius='50%'; el.style.background=color;
+    el.style.boxShadow='0 0 0 2px rgba(0,0,0,.35)'; el.title=label; return el;
+  }
+  const startMarker=new maplibregl.Marker({element:makeMarker('var(--good)','Start'),draggable:true});
+  const endMarker=new maplibregl.Marker({element:makeMarker('var(--red)','End'),draggable:true});
+  startMarker.on('dragstart', ()=>{ prevStartLL = startLL ? [...startLL] : null; });
+  endMarker.on('dragstart',   ()=>{ prevEndLL   = endLL   ? [...endLL]   : null; });
+  startMarker.on('dragend', ()=>{ const ll=startMarker.getLngLat().toArray();
+    if(!insideSelectCircle(ll)){ alert('Start must be inside the 2 km circle.');
+      if(prevStartLL) startMarker.setLngLat(prevStartLL); else { startMarker.remove(); startLL=null; } }
+    else { startLL=ll; maybeRecalcRoute(); } updateRouteStatsUI(); });
+  endMarker.on('dragend', ()=>{ const ll=endMarker.getLngLat().toArray();
+    if(!insideSelectCircle(ll)){ alert('End must be inside the 2 km circle.');
+      if(prevEndLL) endMarker.setLngLat(prevEndLL); else { endMarker.remove(); endLL=null; } }
+    else { endLL=ll; maybeRecalcRoute(); } updateRouteStatsUI(); });
+  function ensureMarkersOnMap(){ if(!startMarker.getElement().isConnected && startLL) startMarker.setLngLat(startLL).addTo(map);
+                                 if(!endMarker.getElement().isConnected && endLL) endMarker.setLngLat(endLL).addTo(map); }
+  function clearMarkers(){ startMarker.remove(); endMarker.remove(); }
+
+  function routePathLayer(){ if(!routeResult) return null; return new deck.PathLayer({
+    id:'route-path', data:routeResult.segments, getPath:d=>d.path, getColor:d=>colorForSpeed(d.eff_kmh??SPD_MIN),
+    widthUnits:'pixels', getWidth:6, pickable:true, parameters:{depthTest:false}
+  });}
+  function selectCircleLayer(){ return new deck.SolidPolygonLayer({
+    id:'select-circle', data:SELECT_CIRCLE, getPolygon:d=>d.polygon, getFillColor:[150,150,150,60],
+    getLineColor:[200,200,200,140], stroked:true, lineWidthUnits:'pixels', getLineWidth:2, pickable:false,
+    parameters:{depthTest:false}
+  });}
+  async function computeRoute(){
+    if(!startLL||!endLL) return;
+    if(!G){ showLoader('Building routing graph…'); G=buildRoutingGraph(); await nextFrame(); await sleep(100); hideLoader();
+      if(!G){ alert('direction_clusters.csv not available for routing'); return; } }
+    showLoader('Computing route…');
+    const s=nearestNode(startLL[0],startLL[1]), t=nearestNode(endLL[0],endLL[1]); if(!s||!t){ hideLoader(); return; }
+    const res=dijkstra(s.idx,t.idx,routeWeightMode); hideLoader();
+    if(!res){ alert('No path found. Try closer points.'); routeResult=null; }
+    else { routeResult=res; const pts=res.coords.map(([lng,lat])=>({lng,lat})); fitTo(pts); }
+    if(currentMode==='route') overlay.setProps({layers: layersFor('route', currentType)});
+    updateRouteStatsUI();
+  }
+  function maybeRecalcRoute(){ if(currentMode!=='route') return; if(startLL&&endLL) computeRoute(); updateRouteStatsUI(); }
+
+  // ---------- OD FLOWS integration ----------
+  // H3 helpers (v3/v4 compat safe)
+  const hv = (typeof h3.latLngToCell === 'function') ? 4 : 3;
+  const geoToH3 = (lat, lng, res) => hv === 4 ? h3.latLngToCell(lat, lng, res) : h3.geoToH3(lat, lng, res);
+  const h3ToCenter = (h) => {
+    if (hv === 4) { const p = h3.cellToLatLng(h); return {lat: p.lat, lng: p.lng}; }
+    const p = h3.h3ToGeo(h); return {lat: p[0], lng: p[1]};
+  };
+
+  let odBuilt=false;
+  let odMap=new Map(), originTotals=new Map(), destTotals=new Map();
+  let originList=[], destGrid=[];
+  let selectedOrigin=null, currentCountsMap=new Map(), currentVmax=0;
+  // ---- OD state (add after existing OD vars) ----
+  let odLabelData = [];
+  let odLabelVersion = 0;
+  function recomputeOdLabels() {
+    // Build a stable array for the TextLayer instead of reading from a Map inside accessors
+    if (!selectedOrigin) {
+      odLabelData = [];
+    } else {
+      odLabelData = destGrid.map(hex => ({ hex, count: currentCountsMap.get(hex) || 0 }));
+    }
+    odLabelVersion++; // bump to trigger TextLayer updates
+  }
+
+
+
+  // White → ocean-blue gradient for OD view
+  function colorWhiteOcean(v, vmax, minTrips){
+    if (!selectedOrigin) return [0,0,0,0];
+    const vv = (v >= minTrips) ? v : 0;
+    if (vmax <= 0 || vv <= 0) return [255,255,255,0];
+    const t0 = Math.max(0, Math.min(1, vv / vmax));
+    const t = Math.pow(t0, 0.65);
+    const ocean = [0,119,190];
+    const r = Math.round(255 + (ocean[0]-255)*t);
+    const g = Math.round(255 + (ocean[1]-255)*t);
+    const b = Math.round(255 + (ocean[2]-255)*t);
+    return [r,g,b, 220];
+  }
+
+  function buildOD(){
+    if (!endpoints.length){ odStatus.textContent='No endpoints data found.'; return; }
+    const RES = parseInt(odH3res.value,10);
+
+    odStatus.textContent='Encoding to H3…';
+
+    // Always consider self-loops (no dropping)
+    const clean = [];
+    for (const r of endpoints){
+      const olat=r.start_lat, olng=r.start_lng, dlat=r.end_lat, dlng=r.end_lng;
+      if ([olat,olng,dlat,dlng].some(v=>!Number.isFinite(v)) ) continue;
+      if (olat<-90||olat>90||dlat<-90||dlat>90||olng<-180||olng>180||dlng<-180||dlng>180) continue;
+      const o = (typeof h3.latLngToCell==='function') ? h3.latLngToCell(olat,olng,RES) : h3.geoToH3(olat,olng,RES);
+      const d = (typeof h3.latLngToCell==='function') ? h3.latLngToCell(dlat,dlng,RES) : h3.geoToH3(dlat,dlng,RES);
+      clean.push({o,d});
+    }
+
+    odStatus.textContent=`Building OD tables from ${clean.length.toLocaleString()} points…`;
+    odMap.clear(); originTotals.clear(); destTotals.clear();
+
+    for (const {o,d} of clean){
+      let dm=odMap.get(o); if(!dm){ dm=new Map(); odMap.set(o,dm); }
+      dm.set(d,(dm.get(d)||0)+1);
+      originTotals.set(o,(originTotals.get(o)||0)+1);
+      destTotals.set(d,(destTotals.get(d)||0)+1);
+    }
+
+    // Max origins = all (no cap)
+    originList = Array.from(originTotals.entries())
+                      .map(([hex,out])=>({hex,out}))
+                      .sort((a,b)=>b.out-a.out);
+
+    // Dest draw limit = no limit (draw all)
+    const allDest = Array.from(destTotals.entries()).sort((a,b)=>b[1]-a[1]).map(([hex,_])=>hex);
+    destGrid = allDest;
+
+    selectedOrigin=null; currentCountsMap=new Map(); currentVmax=0;
+    odSelOrigin.textContent='—'; odSelTrips.textContent='—';
+    recomputeOdLabels();
+    odCounts.textContent=`Origins drawn: ${originList.length.toLocaleString()} | Dest cells drawn: ${destGrid.length.toLocaleString()}`;
+
+    if (originList.length){
+      const {lat,lng}=h3ToCenter(originList[0].hex);
+      map.jumpTo({center:[lng,lat], zoom:11});
+    }
+
+    odStatus.textContent='Done. Click any origin hex.';
+    odBuilt=true;
+  }
+
+  function odDestLayer(){
+    const MIN_TRIPS = 0; // always color all trips (no threshold)
+    return new deck.H3HexagonLayer({
+      id:'od-dest-hexes',
+      data:destGrid,
+      pickable:true,
+      filled:true,
+      extruded:false,
+      wireframe:false,
+      getHexagon:d=>d,
+      getFillColor:d=>{
+        if (!selectedOrigin) return [0,0,0,0];
+        const c=currentCountsMap.get(d)||0;
+        return colorWhiteOcean(c, currentVmax, MIN_TRIPS);
+      },
+      getLineColor:[0,0,0,0],
+      lineWidthMinPixels:0,
+      updateTriggers:{ getFillColor:[selectedOrigin, currentVmax, MIN_TRIPS] },
+      onHover: info => { map.getCanvas().style.cursor = (info?.object && selectedOrigin) ? 'crosshair' : ''; }
+    });
+  }
+
+  function odOriginLayer(){
+    const SELECT_FILL = [220, 60, 60, 160];   // red fill for selected origin
+    const SELECT_LINE = [255,120,120,255];    // red outline for selected origin
+    return new deck.H3HexagonLayer({
+      id:'od-origin-hexes',
+      data:originList,
+      pickable:true,
+      filled:true,
+      extruded:false,
+      wireframe:true,
+      autoHighlight:true,
+      highlightColor:[0, 0, 0, 50],
+      pickingRadius:6,
+      getHexagon:d=>d.hex,
+      getFillColor:d => (selectedOrigin===d.hex ? SELECT_FILL : [0, 0, 0, 4]),
+      getLineWidth:d => (selectedOrigin===d.hex ? 3 : 1.2),
+      getLineColor:d => (selectedOrigin===d.hex ? SELECT_LINE : [220,220,220,180]),
+      lineWidthMinPixels:1.2,
+      updateTriggers:{
+        getLineWidth:[selectedOrigin],
+        getLineColor:[selectedOrigin],
+        getFillColor:[selectedOrigin]
+      },
+      onHover: info => { map.getCanvas().style.cursor = info?.object ? 'pointer' : ''; },
+            // In odOriginLayer() onClick handler:
+      onClick: info => {
+        if (!info?.object) return;
+        const ohex = info.object.hex;
+
+        if (ohex === selectedOrigin) {
+          selectedOrigin = null; currentCountsMap = new Map(); currentVmax = 0;
+          odSelOrigin.textContent = '—'; odSelTrips.textContent = '—';
+          recomputeOdLabels();  // ← add
+          overlay.setProps({ layers: layersFor('od', currentType) });
+          return;
+        }
+
+        selectedOrigin = ohex;
+        const dm = odMap.get(ohex) || new Map();
+        currentCountsMap = dm;
+        currentVmax = 0; for (const v of dm.values()) if (v > currentVmax) currentVmax = v;
+
+        const total = originTotals.get(ohex) || 0;
+        odSelOrigin.textContent = ohex; odSelTrips.textContent = total.toLocaleString();
+        odCounts.textContent = `Destinations from selection: ${dm.size.toLocaleString()} | vmax: ${currentVmax}`;
+
+        recomputeOdLabels();  // ← add
+        overlay.setProps({ layers: layersFor('od', currentType) });
+      }
+
+    });
+  }
+
+function odDestLabelsLayer(){
+  return new deck.TextLayer({
+    id: 'od-dest-labels',
+    data: odLabelData,              // ← stable array, not destGrid
+    pickable: false,
+
+    // Ensure glyph atlas has digits available regardless of first render
+    characterSet: '0123456789',
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace',
+
+    getPosition: d => { const p = h3ToCenter(d.hex); return [p.lng, p.lat]; },
+    getText:     d => d.count > 0 ? String(d.count) : '',
+    getSize:     d => d.count > 0 ? 12 : 0,
+    sizeUnits: 'pixels',
+    getTextAnchor: 'middle',
+    getAlignmentBaseline: 'center',
+
+    // Improve readability on light hexes
+    background: true,
+    getBackgroundColor: [0, 0, 0, 160],
+    getColor: [255, 255, 255, 255],
+
+    parameters: { depthTest: false },
+
+    // Trigger re-layout whenever we rebuild odLabelData
+    updateTriggers: {
+      getText: [odLabelVersion],
+      getSize: [odLabelVersion]
+    }
+  });
+}
+
+
+
+  // ---------- Pricing: demand @ destination + fare formula ----------
+  const M_PER_DEG_LAT = 111320;
+  function mPerDegLngAtLat(lat){ return 111320 * Math.cos(toRad(lat)); }
+
+  // Estimate a dataset-specific clip (≈95th percentile of local counts in given radius) for normalization.
+  let DEMAND_CLIP95 = 1; // fallback
+  function countStartsWithinRadius(lng,lat,radiusM){
+    if (!startPoints.length) return 0;
+    const dLat = radiusM / M_PER_DEG_LAT;
+    const dLng = radiusM / mPerDegLngAtLat(lat);
+    const minLat = lat - dLat, maxLat = lat + dLat;
+    const minLng = lng - dLng, maxLng = lng + dLng;
+    let c=0;
+    for (const sp of startPoints){
+      if (sp.lat < minLat || sp.lat > maxLat) continue;
+      if (sp.lng < minLng || sp.lng > maxLng) continue;
+      const dm = turf.distance([lng,lat],[sp.lng,sp.lat],{units:'kilometers'})*1000;
+      if (dm <= radiusM) c++;
+    }
+    return c;
+  }
+  function estimateDemandClip(radiusM){
+    if (!startPoints.length) return 1;
+    const sampleN = Math.min(400, startPoints.length);
+    const step = Math.max(1, Math.floor(startPoints.length / sampleN));
+    const arr=[];
+    for (let i=0;i<startPoints.length;i+=step){
+      const s = startPoints[i]; const cnt = countStartsWithinRadius(s.lng, s.lat, radiusM);
+      arr.push(cnt);
+    }
+    arr.sort((a,b)=>a-b);
+    const q = arr.length ? arr[Math.floor(0.95*(arr.length-1))] : 1;
+    return Math.max(1, q);
+  }
+
+  function demandAtDestination(lng,lat,radiusM){
+    const count = countStartsWithinRadius(lng,lat,radiusM);
+    const normRaw = count / (DEMAND_CLIP95 || 1);
+    const norm = Math.max(0, Math.min(1, normRaw)); // 0..1
+    const scarcity = 1 - norm; // fewer starts nearby => higher scarcity
+    return {count, norm, scarcity};
+  }
+
+  function computeRecommendedPrice(){
+    if (!routeResult || !endLL) return {ok:false};
+    const base = Number(fareBase.value)   || 0;
+    const perKm= Number(farePerKm.value)  || 0;
+    const perMin=Number(farePerMin.value) || 0;
+    const rM = Math.max(25, Number(demandRadius.value)||300);
+    const w  = Math.max(0, Number(demandWeight.value)||0);
+
+    // components
+    const dist_km = (routeResult.total_m || 0)/1000;
+    const time_min= (routeResult.total_s || 0)/60;
+    const {count, norm, scarcity} = demandAtDestination(endLL[0], endLL[1], rM);
+    const demand_addon = scarcity * w;
+
+    const price = base + dist_km*perKm + time_min*perMin + demand_addon;
 
     return {
-      ...d,
-      arrowLen_m: ARROW_LEN_M,
-      headLen_m: headLen,
-      path: [[d.lng, d.lat], [lng2, lat2]],
-      head: [[lng2, lat2], [lngL, latL], [lngR, latR]]
+      ok:true,
+      price, demand_addon, count, norm,
+      dist_km, time_min, base, perKm, perMin, rM, w
     };
-  });
+  }
 
-  function dirPointsLayer(){
-    return new deck.ScatterplotLayer({
-      id: 'dir-points',
-      data: dirData,
-      getPosition: d=>[d.lng,d.lat],
-      getFillColor: d=>colorForSpeed(d.avgSpd ?? 0),
-      radiusMinPixels: 4,
-      radiusMaxPixels: 8,
-      stroked: true,
-      lineWidthMinPixels: 1,
-      getLineColor: [255,255,255,0],
-      pickable: true,
-      parameters: { depthTest: false }
-    });
+  function updatePriceUI(){
+    if (!endLL || !routeResult){
+      demandCountEl.textContent = '—';
+      demandNormEl.textContent  = '—';
+      demandAddonEl.textContent = '—';
+      priceTxt.textContent = '—';
+      return;
+    }
+    const r = computeRecommendedPrice();
+    if (!r.ok){ priceTxt.textContent='—'; return; }
+    demandCountEl.textContent = r.count.toLocaleString('ru-RU');
+    demandNormEl.textContent  = r.norm.toFixed(2);
+    demandAddonEl.textContent = kzt(r.demand_addon);
+    priceTxt.textContent      = kzt(r.price);
   }
-  function dirPathsLayer(){
-    return new deck.PathLayer({
-      id: 'dir-paths',
-      data: dirData,
-      getPath: d=>d.path,
-      getColor: d=>colorForSpeed(d.avgSpd ?? 0),
-      widthUnits: 'pixels',
-      getWidth: 3,
-      pickable: true,
-      parameters: { depthTest: false }
-    });
-  }
-  function dirHeadsLayer(){
-    return new deck.SolidPolygonLayer({
-      id: 'dir-heads',
-      data: dirData,
-      getPolygon: d=>d.head,
-      getFillColor: d=>colorForSpeed(d.avgSpd ?? 0),
-      pickable: false,
-      parameters: { depthTest: false }
-    });
+
+  // Recompute clip once data is loaded (based on current radius setting)
+  function refreshDemandClip(){
+    const rM = Math.max(25, Number(demandRadius.value)||300);
+    DEMAND_CLIP95 = estimateDemandClip(rM);
+    // Update hint to make normalization transparent
+    const hint = $('#pricingHint');
+    if (hint) hint.textContent = `Formula: base + (km·per_km) + (min·per_min) + (1 − norm)·demand_weight. norm scales by clip≈${DEMAND_CLIP95} (95th pct of starts within ${rM} m).`;
+    updatePriceUI();
   }
 
   // ---------- Switching ----------
-  let currentMode = 'all';
-  let currentType = 'heat';
+  let currentMode='all', currentType='heat';
 
   function layersFor(mode, type){
-    if (mode === 'all'){
-      return (type === 'hex') ? [hexAll()] : [heatAll()];
-    }
-    if (mode === 'pickup'){
-      return (type === 'hex') ? [hexPickup()] : [heatPickup()];
-    }
-    if (mode === 'dest'){
-      return (type === 'hex') ? [hexDest()] : [heatDest()];
-    }
-    // direction
-    return [dirPathsLayer(), dirHeadsLayer(), dirPointsLayer()];
+    if (mode==='all'){ return (type==='hex')?[hexAll()]:[heatAll()]; }
+    if (mode==='pickup'){ return (type==='hex')?[hexPickup()]:[heatPickup()]; }
+    if (mode==='dest'){ return (type==='hex')?[hexDest()]:[heatDest()]; }
+    if (mode==='direction'){ return [dirPathsLayer(), dirHeadsLayer(), dirPointsLayer()]; }
+    if (mode==='route'){ return [selectCircleLayer(), routePathLayer()].filter(Boolean); }
+    // OD: fill → origins → labels (labels on top)
+    return [odDestLayer(), odOriginLayer(), odDestLabelsLayer()];
   }
+
 
   function setLegend(mode, type){
-    if (mode === 'all'){
-      const base = (type === 'hex') ? 'Hexbins show point density.' : 'Heatmap shows point density.';
-      legendText.textContent = `${base} No filters; every point has equal weight.`;
-      return;
-    }
-    if (mode === 'pickup'){
-      legendText.textContent = (type === 'hex')
-        ? 'Pickups (start points): hexbin counts per 50 m cell.'
-        : 'Pickups (start points): heatmap of start_lng/lat density.';
-      return;
-    }
-    if (mode === 'dest'){
-      legendText.textContent = (type === 'hex')
-        ? 'Destinations (end points): hexbin counts per 50 m cell.'
-        : 'Destinations (end points): heatmap of end_lng/lat density.';
-      return;
-    }
-    // direction
-    legendText.textContent = 'Direction clusters: color = BRIGHT red → yellow → green by avg speed; arrow angle = avg azimuth; arrow length = 40 m (fixed).';
+    if (mode==='all'){ legendText.textContent = (type==='hex')
+      ? 'Hexbins show point density. No filters; every point has equal weight.'
+      : 'Heatmap shows point density. No filters; every point has equal weight.'; return; }
+    if (mode==='pickup'){ legendText.textContent = (type==='hex')
+      ? 'Pickups (start points): hexbin counts per 50 m cell.'
+      : 'Pickups (start points): heatmap of start_lng/lat density.'; return; }
+    if (mode==='dest'){ legendText.textContent = (type==='hex')
+      ? 'Destinations (end points): hexbin counts per 50 m cell.'
+      : 'Destinations (end points): heatmap of end_lng/lat density.'; return; }
+    if (mode==='direction'){ legendText.textContent = 'Direction clusters: color = BRIGHT red → yellow → green by avg speed; arrow = avg azimuth; arrow length = 40 m.'; return; }
+    if (mode==='route'){ legendText.textContent = 'Route planner + Pricing: fastest path across direction clusters. Price = base + km + min + scarcity add-on (scarcity from starts within 300m at destination).'; return; }
+    legendText.textContent = 'OD flows: white → ocean blue shows frequency from the selected origin. No selection = transparent.';
   }
-
-  function setLayerTypeDisabled(disabled){
-    layerTypeFieldset.disabled = !!disabled;
-  }
-
+  function setLayerTypeDisabled(disabled){ layerTypeFieldset.disabled=!!disabled; }
+  function setRoutePanelVisible(v){ routePanel.hidden = !v; }
+  function setODPanelVisible(v){ odPanel.hidden = !v; }
   function datasetFor(mode){
-    if (mode === 'all') return speedAll;
-    if (mode === 'pickup') return startPoints;
-    if (mode === 'dest') return endPoints;
-    if (mode === 'direction') return dirRaw;
+    if (mode==='all') return speedAll;
+    if (mode==='pickup') return startPoints;
+    if (mode==='dest') return endPoints;
+    if (mode==='direction') return dirRaw;
     return [];
-    }
+  }
 
   function setView(mode, type){
-    currentMode = mode;
-    currentType = (mode === 'direction') ? currentType : type; // type ignored for direction
+    currentMode=mode;
+    currentType = (mode==='direction'||mode==='route'||mode==='od') ? currentType : type;
+
+    // prepare OD graph on first entry
+    if (mode==='od' && !odBuilt){ buildOD(); }
 
     overlay.setProps({
       layers: layersFor(mode, currentType),
-
-      // ----- Tooltips -----
       getTooltip: ({object, layer})=>{
-        if (!object) return null;
+        if (!object || !layer) return null;
 
-        if (mode === 'direction'){
+        if (mode==='direction'){
           const o = object.avgSpd !== undefined ? object : (object.object ?? {});
-          const spd = o.avgSpd;
-          const azm = o.avgAzm;
-          if (spd!=null && azm!=null){
-            return `Avg speed: ${Math.round(spd)} km/h\nAzimuth: ${Math.round(azm)}°\nArrow length: 40.0 m`;
-          }
+          const spd=o.avgSpd, azm=o.avgAzm;
+          if (spd!=null && azm!=null){ return `Avg speed: ${Math.round(spd)} km/h\nAzimuth: ${Math.round(azm)}°\nArrow length: 40.0 m`; }
           return null;
         }
-
-        // Hexbin counts for any hex layer
-        if (layer && /^hex-/.test(layer.id)){
-          const count = (object.points && object.points.length) ?? object.count ?? 0;
+        if (layer.id==='route-path'){
+          const o = object.object ?? object;
+          if (o && o.eff_kmh!=null) return `Segment speed: ${Math.round(o.eff_kmh)} km/h`;
+        }
+        if (/^hex-/.test(layer.id)){
+          const count=(object.points&&object.points.length) ?? object.count ?? 0;
           return `Points in hex: ${count}`;
         }
-
+        if (layer.id==='od-origin-hexes'){
+          const o = object.object ?? object;
+          if (o && o.hex){ const p=h3ToCenter(o.hex); return `Origin hex: ${o.hex}\nOutgoing trips: ${o.out}\n(${p.lat.toFixed(5)}, ${p.lng.toFixed(5)})\nClick to select`; }
+        }
+        if (layer.id==='od-dest-hexes' && selectedOrigin){
+          const hex = object; const c=currentCountsMap.get(hex)||0;
+          const p=h3ToCenter(hex); return `Dest hex: ${hex}\nTrips from origin: ${c}\n(${p.lat.toFixed(5)}, ${p.lng.toFixed(5)})`;
+        }
         return null;
       }
     });
 
-    const ds = datasetFor(mode);
-    if (ds && ds.length) fitTo(ds);
+    if (mode==='route'){
+      map.fitBounds([[CIRCLE_BBOX[0],CIRCLE_BBOX[1]],[CIRCLE_BBOX[2],CIRCLE_BBOX[3]]], {padding:40, duration:0});
+    } else if (mode!=='od'){
+      const ds=datasetFor(mode); if (ds && ds.length) fitTo(ds);
+    }
 
     setLegend(mode, currentType);
-    setLayerTypeDisabled(mode === 'direction');
+    setLayerTypeDisabled(mode==='direction' || mode==='route' || mode==='od');
+    setRoutePanelVisible(mode==='route');
+    setODPanelVisible(mode==='od');
+
+    // Apply compact no-scroll layout logic for Route/OD
+    applyCompactClasses(mode);
+
+    if (mode==='route'){ ensureMarkersOnMap(); map.getCanvas().style.cursor='crosshair'; updatePriceUI(); }
+    else { clearMarkers(); map.getCanvas().style.cursor=''; }
   }
 
   // Initial render
   map.on('load', async ()=>{
+    // warm up demand clip
+    refreshDemandClip();
+
     showLoader('Rendering map…');
     const initialMode = document.querySelector('input[name="mode"]:checked').value;
     const initialType = document.querySelector('input[name="layertype"]:checked').value;
     setView(initialMode, initialType);
-    await nextFrame();
-    await sleep(250);
+    await nextFrame(); await sleep(250); hideLoader();
+  });
+
+  // Map click to place start/end in route mode
+  map.on('click', (e)=>{
+    if (currentMode!=='route') return;
+    const placing = document.querySelector('input[name="routePlace"]:checked').value;
+    const ll=[e.lngLat.lng, e.lngLat.lat];
+    if (!insideSelectCircle(ll)){ alert('Choose a point INSIDE the 2 km circle.'); return; }
+    if (placing==='start'){ startLL=ll; startMarker.setLngLat(ll).addTo(map); }
+    else { endLL=ll; endMarker.setLngLat(ll).addTo(map); }
+    updateRouteStatsUI(); maybeRecalcRoute();
+  });
+
+  // Buttons & toggles
+  btnClearRoute.addEventListener('click', ()=>{ startLL=null; endLL=null; routeResult=null; startMarker.remove(); endMarker.remove();
+    updateRouteStatsUI(); if (currentMode==='route') overlay.setProps({layers: layersFor('route', currentType)}); });
+  btnRecalc.addEventListener('click', ()=>{ maybeRecalcRoute(); });
+
+  modeInputs.forEach(inp=>{ inp.addEventListener('change', (e)=>{ showLoader('Updating view…'); setView(e.target.value, currentType); hideLoader(); }); });
+  typeInputs.forEach(inp=>{ inp.addEventListener('change', (e)=>{ if (currentMode==='direction'||currentMode==='route'||currentMode==='od') return;
+    showLoader('Updating layer…'); setView(currentMode, e.target.value); hideLoader(); }); });
+  routePlaceInputs.forEach(inp=>{ inp.addEventListener('change', ()=>{}); });
+  document.querySelectorAll('input[name="routeWeight"]').forEach(inp=>{
+    inp.addEventListener('change', (e)=>{ routeWeightMode=e.target.value; maybeRecalcRoute(); });
+  });
+
+  // Pricing knobs
+  [fareBase, farePerKm, farePerMin, demandWeight].forEach(inp=>{
+    inp.addEventListener('input', updatePriceUI);
+  });
+  demandRadius.addEventListener('input', ()=>{ refreshDemandClip(); });
+
+  odH3res.addEventListener('change', ()=>{
+    showLoader('Recomputing OD…');
+    buildOD();
+    overlay.setProps({layers: layersFor('od', currentType)});
     hideLoader();
   });
 
-  // Update handlers
-  async function updateViewMode(newMode){
-    showLoader('Updating view…');
-    setView(newMode, currentType);
-    await nextFrame();
-    await sleep(150);
-    hideLoader();
-  }
-  async function updateLayerType(newType){
-    if (currentMode === 'direction') return; // ignored
-    showLoader('Updating layer…');
-    setView(currentMode, newType);
-    await nextFrame();
-    await sleep(150);
-    hideLoader();
-  }
-
-  modeInputs.forEach(inp=>{ inp.addEventListener('change', (e)=>updateViewMode(e.target.value)); });
-  typeInputs.forEach(inp=>{ inp.addEventListener('change', (e)=>updateLayerType(e.target.value)); });
 })();
 </script>
 </body>

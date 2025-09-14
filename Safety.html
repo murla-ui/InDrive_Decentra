@@ -17,6 +17,12 @@
   <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
 
   <style>
+     .card{box-shadow:0 1px 6px rgba(0,0,0,0.08)}
+     .pill_{
+      font-size:.75rem; font-weight:800; padding:.25rem .55rem; border-radius:999px;
+      background: var(--indrive); color:#ffffff; border:1px solid rgba(255, 255, 255, 1
+      );
+    }
     :root{
       --peach:#E5BA83; /* warm peach */
       --teal:#376C8A;  /* deep teal */
@@ -78,17 +84,20 @@
   <aside id="sidebar">
     <header>
       <h1>Safety Risk Map</h1>
+      <a class="card" href="https://murla-ui.github.io/InDrive_Decentra/" style="text-decoration:none">
+  <span class="pill_">Main menu</span>
+</a>
+
     </header>
 
     <div id="controls">
       <div class="group">
         <h3>Choose a view</h3>
+        <label class="row"><input type="radio" name="mode" value="over60">Speeding, high risk zone (&gt; 60 km/h)</label>
         <label class="row"><input type="radio" name="mode" value="near40" checked>School zone high risk casualty (&gt; 40 km/h)</label>
         <label class="row"><input type="radio" name="mode" value="res20">Residential zone high risk casualty (&gt; 20 km/h)</label>
-        <label class="row"><input type="radio" name="mode" value="over60">Speeding, high risk zone (&gt; 60 km/h)</label>
-        <!-- Cameras view -->
         <label class="row"><input type="radio" name="mode" value="cam80">Speed camera overspeed (≤ 80 m from camera)</label>
-        <div class="hint">Only one view is visible at a time.</div>
+      
       </div>
 
       <!-- Layer type toggle -->
