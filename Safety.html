@@ -323,7 +323,27 @@
   map.addControl(new maplibregl.NavigationControl({visualizePitch: true}), 'top-right');
 
   // ---- deck.gl overlay ----
-  const overlay = new deck.MapboxOverlay({interleaved: true});
+  function tooltipHandler({object, layer}){
+    if (!object || !layer || !layer.id) return null;
+    const id = layer.id;
+
+    if (id === 'schools'){
+      const name = object.Name || 'School';
+      return {text: name};
+    }
+    if (id === 'cameras'){
+      const lim = object.speed_limit;
+      return {text: Number.isFinite(lim) ? `Speed limit: ${Math.round(lim)} km/h` : 'Speed camera'};
+    }
+    if (id.startsWith('hex-')){
+      // HexagonLayer exposes original points for the cell
+      const cnt = (object.points && object.points.length) ? object.points.length : 0;
+      return {text: `Points in hex: ${cnt}`};
+    }
+    return null;
+  }
+
+  const overlay = new deck.MapboxOverlay({interleaved: true, getTooltip: tooltipHandler});
   map.addControl(overlay);
 
   // ---- color ranges (bright yellow → bright red) ----
@@ -368,7 +388,8 @@
       lineWidthMinPixels: 1,
       getLineColor: [255,255,255,220],
       getFillColor: [55,108,138,220],
-      pickable: false,
+      pickable: true,               // <— tooltips
+      autoHighlight: true,
       parameters: { depthTest: false }
     });
   }
@@ -403,7 +424,8 @@
       lineWidthMinPixels: 1,
       getFillColor: [55,108,138,220],
       getLineColor: [255,255,255,200],
-      pickable: false,
+      pickable: true,               // <— tooltips
+      autoHighlight: true,
       parameters: { depthTest: false }
     });
   }
@@ -438,7 +460,8 @@
       coverage: 0.9,
       extruded: false,
       elevationScale: 0,
-      pickable: false
+      pickable: true,                // <— tooltips
+      autoHighlight: true
     });
   }
   const hexNear40 = ()=>hexLayer('hex-near40', near40);

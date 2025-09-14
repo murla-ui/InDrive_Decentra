@@ -86,6 +86,8 @@
       <div class="group">
         <h3>Choose a view</h3>
         <label class="row"><input type="radio" name="mode" value="all" checked>All points density (no filters)</label>
+        <label class="row"><input type="radio" name="mode" value="pickup">Start density (pickups)</label>
+        <label class="row"><input type="radio" name="mode" value="dest">End density (destinations)</label>
         <label class="row"><input type="radio" name="mode" value="direction">Direction clusters</label>
         <div class="hint">Only one view is visible at a time.</div>
       </div>
@@ -136,12 +138,13 @@
   showLoader('Loading data…');
 
   // ---------- Config & UI refs ----------
-  const CSV_URL_SPEED = 'final_speed.csv';
-  const CSV_URL_DIR   = 'direction_clusters.csv';
-  const HEX_RADIUS_M  = 50;         // for hexbins
+  const CSV_URL_SPEED   = 'final_speed.csv';
+  const CSV_URL_DIR     = 'direction_clusters.csv';
+  const CSV_URL_ENDPTS  = 'route_endpoints.csv';
+  const HEX_RADIUS_M    = 50;         // for hexbins
 
   // Arrow visuals (direction mode) — fixed length 40 m
-  const ARROW_LEN_M     = 40;       // << fixed shaft length
+  const ARROW_LEN_M     = 40;       // fixed shaft length
   const HEAD_FRACTION   = 0.4;      // arrowhead length as a fraction of shaft
   const HEAD_OFFSET_DEG = 150;      // head arms ± this from reverse direction
 
@@ -160,9 +163,10 @@
   const toNum = (x)=>{ const v = Number(x); return Number.isFinite(v) ? v : null; };
 
   // Load datasets
-  const [rawSpeed, rawDir] = await Promise.all([
+  const [rawSpeed, rawDir, rawEndpoints] = await Promise.all([
     loadCSV(CSV_URL_SPEED),
-    loadCSV(CSV_URL_DIR).catch(()=>[]) // allow missing direction file gracefully
+    loadCSV(CSV_URL_DIR).catch(()=>[]),   // direction is optional
+    loadCSV(CSV_URL_ENDPTS)               // endpoints expected
   ]);
 
   // Normalize speeds (all points)
@@ -172,6 +176,21 @@
     lng: toNum(r.lng),
     spd_kmh: toNum(r.spd_kmh ?? r.spd_km_h ?? r.speed_kmh ?? r.spd)
   })).filter(d=>d.lat!=null && d.lng!=null);
+
+  // Normalize endpoints
+  const endpoints = (rawEndpoints || []).map(r=>({
+    randomized_id: r.randomized_id ?? r.id ?? r.route_id,
+    start_lat: toNum(r.start_lat),
+    start_lng: toNum(r.start_lng),
+    end_lat:   toNum(r.end_lat),
+    end_lng:   toNum(r.end_lng)
+  }));
+  const startPoints = endpoints
+    .filter(e=>e.start_lat!=null && e.start_lng!=null)
+    .map(e=>({randomized_id:e.randomized_id, lat:e.start_lat, lng:e.start_lng}));
+  const endPoints = endpoints
+    .filter(e=>e.end_lat!=null && e.end_lng!=null)
+    .map(e=>({randomized_id:e.randomized_id, lat:e.end_lat, lng:e.end_lng}));
 
   // Normalize direction clusters
   const dirRaw = (rawDir || []).map(r=>({
@@ -212,6 +231,8 @@
   // ---------- MapLibre (dark raster) ----------
   const centerGuess =
     speedAll[0] ? [speedAll[0].lng, speedAll[0].lat] :
+    startPoints[0] ? [startPoints[0].lng, startPoints[0].lat] :
+    endPoints[0] ? [endPoints[0].lng, endPoints[0].lat] :
     dirRaw[0]    ? [dirRaw[0].lng, dirRaw[0].lat]    :
                    [76.9,43.25];
 
@@ -242,7 +263,7 @@
   map.addControl(overlay);
 
   // ---------- Color ranges ----------
-  // Heat/hex: bright yellow -> bright red
+  // Heat/hex: bright yellow -> bright red (low counts slightly visible)
   const HEAT_COLOR_RANGE = [
     [255,255,180, 10],
     [255,255,180, 40],
@@ -285,11 +306,11 @@
     }
   }
 
-  // ---------- Layers: All-points (heat/hex) ----------
-  function heatAll(){
+  // ---------- Layer factories ----------
+  function makeHeatLayer(id, data){
     return new deck.HeatmapLayer({
-      id: 'heat-all',
-      data: speedAll,
+      id,
+      data,
       getPosition: d=>[d.lng,d.lat],
       getWeight: _=>1,
       radiusPixels: 30,
@@ -299,10 +320,10 @@
       pickable: false
     });
   }
-  function hexAll(){
+  function makeHexLayer(id, data){
     return new deck.HexagonLayer({
-      id: 'hex-all',
-      data: speedAll,
+      id,
+      data,
       getPosition: d=>[d.lng, d.lat],
       radius: HEX_RADIUS_M,
       colorAggregation: 'SUM',
@@ -311,16 +332,28 @@
       coverage: 0.9,
       extruded: false,
       elevationScale: 0,
-      pickable: false
+      pickable: true,
+      autoHighlight: true
     });
   }
+
+  // Existing "all points" quick creators
+  const heatAll = ()=> makeHeatLayer('heat-all', speedAll);
+  const hexAll  = ()=> makeHexLayer('hex-all', speedAll);
+
+  // Pickup / Destination creators
+  const heatPickup = ()=> makeHeatLayer('heat-pickup', startPoints);
+  const hexPickup  = ()=> makeHexLayer('hex-pickup', startPoints);
+
+  const heatDest   = ()=> makeHeatLayer('heat-dest', endPoints);
+  const hexDest    = ()=> makeHexLayer('hex-dest', endPoints);
 
   // ---------- Direction clusters prep (fixed arrow length) ----------
   const dirData = dirRaw.map(d=>{
     const headLen = Math.max(4, ARROW_LEN_M * HEAD_FRACTION);
     const [lng2, lat2] = dest(d.lng, d.lat, ARROW_LEN_M, d.avgAzm ?? 0);
 
-    // Arrow head: ±30° from reverse (i.e., ±150° from forward)
+    // Arrow head: ±150° from forward (i.e., ±30° off the reverse)
     const leftBearing  = (d.avgAzm ?? 0) + HEAD_OFFSET_DEG;
     const rightBearing = (d.avgAzm ?? 0) - HEAD_OFFSET_DEG;
     const [lngL, latL] = dest(lng2, lat2, headLen, leftBearing);
@@ -381,6 +414,13 @@
     if (mode === 'all'){
       return (type === 'hex') ? [hexAll()] : [heatAll()];
     }
+    if (mode === 'pickup'){
+      return (type === 'hex') ? [hexPickup()] : [heatPickup()];
+    }
+    if (mode === 'dest'){
+      return (type === 'hex') ? [hexDest()] : [heatDest()];
+    }
+    // direction
     return [dirPathsLayer(), dirHeadsLayer(), dirPointsLayer()];
   }
 
@@ -388,22 +428,47 @@
     if (mode === 'all'){
       const base = (type === 'hex') ? 'Hexbins show point density.' : 'Heatmap shows point density.';
       legendText.textContent = `${base} No filters; every point has equal weight.`;
-    } else {
-      legendText.textContent = 'Direction clusters: color = BRIGHT red → yellow → green by avg speed; arrow angle = avg azimuth; arrow length = 40 m (fixed).';
+      return;
     }
+    if (mode === 'pickup'){
+      legendText.textContent = (type === 'hex')
+        ? 'Pickups (start points): hexbin counts per 50 m cell.'
+        : 'Pickups (start points): heatmap of start_lng/lat density.';
+      return;
+    }
+    if (mode === 'dest'){
+      legendText.textContent = (type === 'hex')
+        ? 'Destinations (end points): hexbin counts per 50 m cell.'
+        : 'Destinations (end points): heatmap of end_lng/lat density.';
+      return;
+    }
+    // direction
+    legendText.textContent = 'Direction clusters: color = BRIGHT red → yellow → green by avg speed; arrow angle = avg azimuth; arrow length = 40 m (fixed).';
   }
 
   function setLayerTypeDisabled(disabled){
     layerTypeFieldset.disabled = !!disabled;
   }
 
+  function datasetFor(mode){
+    if (mode === 'all') return speedAll;
+    if (mode === 'pickup') return startPoints;
+    if (mode === 'dest') return endPoints;
+    if (mode === 'direction') return dirRaw;
+    return [];
+    }
+
   function setView(mode, type){
     currentMode = mode;
     currentType = (mode === 'direction') ? currentType : type; // type ignored for direction
+
     overlay.setProps({
       layers: layersFor(mode, currentType),
+
+      // ----- Tooltips -----
       getTooltip: ({object, layer})=>{
         if (!object) return null;
+
         if (mode === 'direction'){
           const o = object.avgSpd !== undefined ? object : (object.object ?? {});
           const spd = o.avgSpd;
@@ -411,12 +476,20 @@
           if (spd!=null && azm!=null){
             return `Avg speed: ${Math.round(spd)} km/h\nAzimuth: ${Math.round(azm)}°\nArrow length: 40.0 m`;
           }
+          return null;
         }
+
+        // Hexbin counts for any hex layer
+        if (layer && /^hex-/.test(layer.id)){
+          const count = (object.points && object.points.length) ?? object.count ?? 0;
+          return `Points in hex: ${count}`;
+        }
+
         return null;
       }
     });
 
-    const ds = (mode === 'all') ? speedAll : dirRaw;
+    const ds = datasetFor(mode);
     if (ds && ds.length) fitTo(ds);
 
     setLegend(mode, currentType);
