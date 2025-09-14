@@ -30,6 +30,10 @@
 - `safety.bmp`, `business.bmp` — обложки/превью для галереи.
 - `route_endpoints.py` — CLI-скрипт для расчёта начала/конца определенного маршрута и (по желанию) heatmap по Астане.
 
+пример запуска
+```
+python route_endpoints.py /path/to/csv --no-heatmap 
+```
 
 ## Дальнейшие шаги 
 
