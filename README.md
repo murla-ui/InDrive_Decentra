@@ -1,7 +1,7 @@
 # InDrive Geoanalytics — документация
 > Прототип интерактивной геоаналитики для дорожной безопасности и пропускной способности улично-дорожной сети.
 
-## [inDrive GeoAnalytics](https://murla-ui.github.io/InDrive_Decentra/)
+## [Link to Platdor: inDrive GeoAnalytics](https://murla-ui.github.io/InDrive_Decentra/)
 ## [Link to the Demo Video and Presentation](https://drive.google.com/drive/folders/16Nnz7wq4OQvk5ukCI8QLzXCTs6n68vKE?usp=sharing)
 
 
