@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Business map</title>
+
+  <!-- MapLibre (CSS + JS) -->
+  <link href="https://unpkg.com/maplibre-gl@3.5.2/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@3.5.2/dist/maplibre-gl.js"></script>
+
+  <!-- Exactly one deck.gl bundle (global `deck`) -->
+  <script src="https://unpkg.com/deck.gl@8.8.27/dist.min.js"></script>
+
+  <!-- Utilities -->
+  <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
+  <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+
+  <style>
+    :root{
+      --peach:#E5BA83; /* warm peach */
+      --teal:#376C8A;  /* deep teal */
+      --red:#D64550;   /* palette red */
+      --bg:#0b0f13;    /* darker app bg */
+      --panel:#12181e; /* darker side panel */
+      --text:#e6edf3;
+      --muted:#9aa4af;
+      --good:#008A3E;
+    }
+    html,body,#app{height:100%;margin:0}
+    #app{
+      display:grid;grid-template-columns:300px 1fr;
+      background:var(--bg);color:var(--text);
+      font:14px/1.4 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial
+    }
+    #sidebar{background:var(--panel);border-right:1px solid #1f2730;display:flex;flex-direction:column}
+    header{padding:14px 16px;border-bottom:1px solid #1f2730}
+    header h1{font-size:16px;margin:0 0 6px 0;font-weight:700}
+    header .sub{color:var(--muted);font-size:12px}
+    #controls{padding:12px 14px;overflow:auto}
+    .group{margin-bottom:14px}
+    .group h3{font-size:13px;margin:0 0 8px 0;color:#c7d1db}
+    label.row{display:flex;align-items:center;gap:10px;margin:8px 0}
+    label.row input[type="radio"]{accent-color:var(--teal)}
+    .hint{color:var(--muted);font-size:12px}
+    .legend{display:flex;flex-wrap:wrap;gap:6px}
+    .pill{display:inline-flex;align-items:center;gap:6px;padding:6px 8px;border-radius:10px;background:#0f151b;border:1px solid #1f2a33}
+    #map{position:relative}
+    #mapContainer{position:relative;height:100%}
+    footer{padding:10px 14px;border-top:1px solid #1f2730;color:var(--muted);font-size:12px}
+    footer a{color:var(--peach);text-decoration:none}
+
+    /* Loading overlay */
+    #loading{
+      position:fixed; inset:0; display:none;
+      align-items:center; justify-content:center;
+      background:rgba(11,15,19,0.6);
+      backdrop-filter: blur(2px);
+      z-index:9999;
+      pointer-events:all;
+    }
+    #loading .panel{
+      display:flex; align-items:center; gap:12px;
+      background:#0f151b; border:1px solid #1f2a33; border-radius:12px;
+      padding:14px 16px; box-shadow:0 10px 30px rgba(0,0,0,0.4);
+    }
+    #loading .spinner{
+      width:28px; height:28px; border-radius:50%;
+      border:3px solid #24303a; border-top-color:var(--peach);
+      animation:spin 0.9s linear infinite;
+    }
+    #loading .msg{font-weight:600; color:var(--text)}
+    @keyframes spin {to{transform:rotate(360deg)}}
+    fieldset{border:0;padding:0;margin:0}
+    fieldset[disabled]{opacity:.55}
+  </style>
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <header>
+      <h1>Business Map</h1>
+    </header>
+
+    <div id="controls">
+      <div class="group">
+        <h3>Choose a view</h3>
+        <label class="row"><input type="radio" name="mode" value="all" checked>All points density (no filters)</label>
+        <label class="row"><input type="radio" name="mode" value="direction">Direction clusters</label>
+        <div class="hint">Only one view is visible at a time.</div>
+      </div>
+
+      <div class="group">
+        <h3>Layer type</h3>
+        <fieldset id="layerType">
+          <label class="row"><input type="radio" name="layertype" value="heat" checked>Heatmap</label>
+          <label class="row"><input type="radio" name="layertype" value="hex">Hexbins</label>
+          <div class="hint">Hexbins aggregate points into hexagonal cells (radius of 50 meters).</div>
+        </fieldset>
+      </div>
+
+      <div class="group">
+        <h3>Legend</h3>
+        <div class="legend" id="legend">
+          <span class="pill" id="legendText">Heatmap shows density (no filters).</span>
+        </div>
+      </div>
+    </div>
+
+    <footer>
+      Built by ElArNa.
+    </footer>
+  </aside>
+
+  <section id="map">
+    <div id="mapContainer"></div>
+  </section>
+</div>
+
+<!-- Loading overlay -->
+<div id="loading" role="status" aria-live="polite" aria-busy="true">
+  <div class="panel">
+    <div class="spinner" aria-hidden="true"></div>
+    <div class="msg" id="loadingText">Loading…</div>
+  </div>
+</div>
+
+<script>
+(async function(){
+  // ---------- Helpers ----------
+  const $ = (sel)=>document.querySelector(sel);
+  const nextFrame = () => new Promise(r => requestAnimationFrame(()=>r()));
+  const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
+  function showLoader(msg='Loading…'){ const el=$('#loading'),txt=$('#loadingText'); if(txt) txt.textContent=msg; if(el) el.style.display='flex'; }
+  function hideLoader(){ const el=$('#loading'); if(el) el.style.display='none'; }
+  showLoader('Loading data…');
+
+  // ---------- Config & UI refs ----------
+  const CSV_URL_SPEED = 'final_speed.csv';
+  const CSV_URL_DIR   = 'direction_clusters.csv';
+  const HEX_RADIUS_M  = 50;         // for hexbins
+
+  // Arrow visuals (direction mode) — fixed length 40 m
+  const ARROW_LEN_M     = 40;       // << fixed shaft length
+  const HEAD_FRACTION   = 0.4;      // arrowhead length as a fraction of shaft
+  const HEAD_OFFSET_DEG = 150;      // head arms ± this from reverse direction
+
+  const modeInputs = document.querySelectorAll('input[name="mode"]');
+  const typeInputs = document.querySelectorAll('input[name="layertype"]');
+  const layerTypeFieldset = $('#layerType');
+  const legendText = $('#legendText');
+
+  // ---------- CSV loader ----------
+  async function loadCSV(url){
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Failed to fetch ${url}`);
+    const text = await res.text();
+    return Papa.parse(text, {header:true, dynamicTyping:true, skipEmptyLines:true}).data;
+  }
+  const toNum = (x)=>{ const v = Number(x); return Number.isFinite(v) ? v : null; };
+
+  // Load datasets
+  const [rawSpeed, rawDir] = await Promise.all([
+    loadCSV(CSV_URL_SPEED),
+    loadCSV(CSV_URL_DIR).catch(()=>[]) // allow missing direction file gracefully
+  ]);
+
+  // Normalize speeds (all points)
+  const speedAll = rawSpeed.map(r=>({
+    randomized_id: r.randomized_id ?? r.rand_id ?? r.id,
+    lat: toNum(r.lat),
+    lng: toNum(r.lng),
+    spd_kmh: toNum(r.spd_kmh ?? r.spd_km_h ?? r.speed_kmh ?? r.spd)
+  })).filter(d=>d.lat!=null && d.lng!=null);
+
+  // Normalize direction clusters
+  const dirRaw = (rawDir || []).map(r=>({
+    lat: toNum(r.centroid_lat ?? r.lat ?? r.latitude),
+    lng: toNum(r.centroid_lng ?? r.lng ?? r.lon ?? r.longitude),
+    avgSpd: toNum(r.avg_spd_kmh ?? r.spd ?? r.speed),
+    avgAzm: toNum(r.avg_azm ?? r.azm ?? r.bearing) // degrees [0..360)
+  })).filter(d=>d.lat!=null && d.lng!=null && d.avgAzm!=null);
+
+  // Extents for color scaling (direction view)
+  const spdVals = dirRaw.map(d=>d.avgSpd).filter(v=>v!=null && Number.isFinite(v));
+  const SPD_MIN = spdVals.length ? Math.min(...spdVals) : 0;
+  const SPD_MAX = spdVals.length ? Math.max(...spdVals) : 1;
+
+  // ---------- small geo helpers ----------
+  function computeBounds(points){
+    let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+    for (const p of points){
+      if (p.lng<minX) minX=p.lng;
+      if (p.lng>maxX) maxX=p.lng;
+      if (p.lat<minY) minY=p.lat;
+      if (p.lat>maxY) maxY=p.lat;
+    }
+    return {minX, minY, maxX, maxY};
+  }
+  function fitTo(points){
+    if (!points || !points.length) return;
+    const b = computeBounds(points);
+    map.fitBounds([[b.minX,b.minY],[b.maxX,b.maxY]], {padding: 40, duration: 0});
+  }
+  // destination using turf (distance in meters, bearing in degrees)
+  function dest(lng, lat, distance_m, bearing_deg){
+    const pt = turf.point([lng, lat]);
+    const out = turf.destination(pt, distance_m/1000, bearing_deg, {units:'kilometers'});
+    return out.geometry.coordinates; // [lng, lat]
+  }
+
+  // ---------- MapLibre (dark raster) ----------
+  const centerGuess =
+    speedAll[0] ? [speedAll[0].lng, speedAll[0].lat] :
+    dirRaw[0]    ? [dirRaw[0].lng, dirRaw[0].lat]    :
+                   [76.9,43.25];
+
+  const map = new maplibregl.Map({
+    container: 'mapContainer',
+    style: {
+      version: 8,
+      sources: {
+        dark: {
+          type: 'raster',
+          tiles: ['https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'],
+          tileSize: 256,
+          attribution: '© OpenStreetMap contributors, © CARTO'
+        }
+      },
+      layers: [{ id: 'dark', type: 'raster', source: 'dark' }],
+      glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf'
+    },
+    center: centerGuess,
+    zoom: 11,
+    pitch: 0,
+    bearing: 0
+  });
+  map.addControl(new maplibregl.NavigationControl({visualizePitch: true}), 'top-right');
+
+  // ---------- deck.gl overlay ----------
+  const overlay = new deck.MapboxOverlay({interleaved: true});
+  map.addControl(overlay);
+
+  // ---------- Color ranges ----------
+  // Heat/hex: bright yellow -> bright red
+  const HEAT_COLOR_RANGE = [
+    [255,255,180, 10],
+    [255,255,180, 40],
+    [255,255,180,100],
+    [255,255,180,140],
+    [255,245,120,180],
+    [255,210, 70,210],
+    [255,140, 40,235],
+    [255, 40, 30,255]
+  ];
+
+  // Direction: BRIGHT red -> BRIGHT yellow -> BRIGHT green
+  const DIR_RED    = [255,  60,  60];
+  const DIR_YELLOW = [255, 255,   0];
+  const DIR_GREEN  = [ 60, 255, 120];
+
+  function lerp(a,b,t){ return Math.round(a + (b-a)*t); }
+
+  function colorForSpeed(speed){
+    const tRaw = (speed - SPD_MIN) / ((SPD_MAX - SPD_MIN) || 1);
+    const t = Math.max(0, Math.min(1, tRaw));
+    if (t <= 0.5){
+      // red -> yellow
+      const s = t * 2;
+      return [
+        lerp(DIR_RED[0],    DIR_YELLOW[0], s),
+        lerp(DIR_RED[1],    DIR_YELLOW[1], s),
+        lerp(DIR_RED[2],    DIR_YELLOW[2], s),
+        255
+      ];
+    } else {
+      // yellow -> green
+      const s = (t - 0.5) * 2;
+      return [
+        lerp(DIR_YELLOW[0], DIR_GREEN[0], s),
+        lerp(DIR_YELLOW[1], DIR_GREEN[1], s),
+        lerp(DIR_YELLOW[2], DIR_GREEN[2], s),
+        255
+      ];
+    }
+  }
+
+  // ---------- Layers: All-points (heat/hex) ----------
+  function heatAll(){
+    return new deck.HeatmapLayer({
+      id: 'heat-all',
+      data: speedAll,
+      getPosition: d=>[d.lng,d.lat],
+      getWeight: _=>1,
+      radiusPixels: 30,
+      intensity: 1.1,
+      threshold: 0.005,
+      colorRange: HEAT_COLOR_RANGE,
+      pickable: false
+    });
+  }
+  function hexAll(){
+    return new deck.HexagonLayer({
+      id: 'hex-all',
+      data: speedAll,
+      getPosition: d=>[d.lng, d.lat],
+      radius: HEX_RADIUS_M,
+      colorAggregation: 'SUM',
+      getColorWeight: _=>1,
+      colorRange: HEAT_COLOR_RANGE,
+      coverage: 0.9,
+      extruded: false,
+      elevationScale: 0,
+      pickable: false
+    });
+  }
+
+  // ---------- Direction clusters prep (fixed arrow length) ----------
+  const dirData = dirRaw.map(d=>{
+    const headLen = Math.max(4, ARROW_LEN_M * HEAD_FRACTION);
+    const [lng2, lat2] = dest(d.lng, d.lat, ARROW_LEN_M, d.avgAzm ?? 0);
+
+    // Arrow head: ±30° from reverse (i.e., ±150° from forward)
+    const leftBearing  = (d.avgAzm ?? 0) + HEAD_OFFSET_DEG;
+    const rightBearing = (d.avgAzm ?? 0) - HEAD_OFFSET_DEG;
+    const [lngL, latL] = dest(lng2, lat2, headLen, leftBearing);
+    const [lngR, latR] = dest(lng2, lat2, headLen, rightBearing);
+
+    return {
+      ...d,
+      arrowLen_m: ARROW_LEN_M,
+      headLen_m: headLen,
+      path: [[d.lng, d.lat], [lng2, lat2]],
+      head: [[lng2, lat2], [lngL, latL], [lngR, latR]]
+    };
+  });
+
+  function dirPointsLayer(){
+    return new deck.ScatterplotLayer({
+      id: 'dir-points',
+      data: dirData,
+      getPosition: d=>[d.lng,d.lat],
+      getFillColor: d=>colorForSpeed(d.avgSpd ?? 0),
+      radiusMinPixels: 4,
+      radiusMaxPixels: 8,
+      stroked: true,
+      lineWidthMinPixels: 1,
+      getLineColor: [255,255,255,0],
+      pickable: true,
+      parameters: { depthTest: false }
+    });
+  }
+  function dirPathsLayer(){
+    return new deck.PathLayer({
+      id: 'dir-paths',
+      data: dirData,
+      getPath: d=>d.path,
+      getColor: d=>colorForSpeed(d.avgSpd ?? 0),
+      widthUnits: 'pixels',
+      getWidth: 3,
+      pickable: true,
+      parameters: { depthTest: false }
+    });
+  }
+  function dirHeadsLayer(){
+    return new deck.SolidPolygonLayer({
+      id: 'dir-heads',
+      data: dirData,
+      getPolygon: d=>d.head,
+      getFillColor: d=>colorForSpeed(d.avgSpd ?? 0),
+      pickable: false,
+      parameters: { depthTest: false }
+    });
+  }
+
+  // ---------- Switching ----------
+  let currentMode = 'all';
+  let currentType = 'heat';
+
+  function layersFor(mode, type){
+    if (mode === 'all'){
+      return (type === 'hex') ? [hexAll()] : [heatAll()];
+    }
+    return [dirPathsLayer(), dirHeadsLayer(), dirPointsLayer()];
+  }
+
+  function setLegend(mode, type){
+    if (mode === 'all'){
+      const base = (type === 'hex') ? 'Hexbins show point density.' : 'Heatmap shows point density.';
+      legendText.textContent = `${base} No filters; every point has equal weight.`;
+    } else {
+      legendText.textContent = 'Direction clusters: color = BRIGHT red → yellow → green by avg speed; arrow angle = avg azimuth; arrow length = 40 m (fixed).';
+    }
+  }
+
+  function setLayerTypeDisabled(disabled){
+    layerTypeFieldset.disabled = !!disabled;
+  }
+
+  function setView(mode, type){
+    currentMode = mode;
+    currentType = (mode === 'direction') ? currentType : type; // type ignored for direction
+    overlay.setProps({
+      layers: layersFor(mode, currentType),
+      getTooltip: ({object, layer})=>{
+        if (!object) return null;
+        if (mode === 'direction'){
+          const o = object.avgSpd !== undefined ? object : (object.object ?? {});
+          const spd = o.avgSpd;
+          const azm = o.avgAzm;
+          if (spd!=null && azm!=null){
+            return `Avg speed: ${Math.round(spd)} km/h\nAzimuth: ${Math.round(azm)}°\nArrow length: 40.0 m`;
+          }
+        }
+        return null;
+      }
+    });
+
+    const ds = (mode === 'all') ? speedAll : dirRaw;
+    if (ds && ds.length) fitTo(ds);
+
+    setLegend(mode, currentType);
+    setLayerTypeDisabled(mode === 'direction');
+  }
+
+  // Initial render
+  map.on('load', async ()=>{
+    showLoader('Rendering map…');
+    const initialMode = document.querySelector('input[name="mode"]:checked').value;
+    const initialType = document.querySelector('input[name="layertype"]:checked').value;
+    setView(initialMode, initialType);
+    await nextFrame();
+    await sleep(250);
+    hideLoader();
+  });
+
+  // Update handlers
+  async function updateViewMode(newMode){
+    showLoader('Updating view…');
+    setView(newMode, currentType);
+    await nextFrame();
+    await sleep(150);
+    hideLoader();
+  }
+  async function updateLayerType(newType){
+    if (currentMode === 'direction') return; // ignored
+    showLoader('Updating layer…');
+    setView(currentMode, newType);
+    await nextFrame();
+    await sleep(150);
+    hideLoader();
+  }
+
+  modeInputs.forEach(inp=>{ inp.addEventListener('change', (e)=>updateViewMode(e.target.value)); });
+  typeInputs.forEach(inp=>{ inp.addEventListener('change', (e)=>updateLayerType(e.target.value)); });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>inDrive Geoanalytics</title>
+  <meta name="theme-color" content="#0f1115" />
+  <style>
+    :root{
+      color-scheme: dark;
+      --indrive:#C0F11C;     /* inDrive green */
+      --ink:#e7e8ea;         /* primary text on dark */
+      --muted:#9aa0a6;       /* subdued text */
+      --bg:#0f1115;          /* page background (dark) */
+      --card:#131720;        /* tile background (dark surface) */
+      --border:#1c2030;      /* subtle border on dark */
+      --ring: rgba(192,241,28,0.35); /* focus ring */
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0;
+      font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,Helvetica,Arial,"Apple Color Emoji","Segoe UI Emoji";
+      background:var(--bg);
+      color:var(--ink);
+    }
+
+    .bar{
+      height:6px;
+      background:linear-gradient(90deg, var(--indrive), rgba(192,241,28,0.35));
+      width:100%;
+    }
+
+    header{
+      max-width:1000px; margin:24px auto 8px; padding:0 20px;
+      display:flex; align-items:flex-end; justify-content:space-between; gap:12px;
+    }
+    h1{
+      margin:0; font-size:clamp(20px,3.2vw,28px); font-weight:800; letter-spacing:.1px;
+      color:var(--ink);
+    }
+    .hint{color:var(--muted); font-size:.95rem}
+
+    main{max-width:1000px; margin:0 auto 40px; padding:0 20px}
+    .grid{
+      display:grid;
+      grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));
+      gap:16px;
+    }
+
+    /* Gallery card */
+    .card{
+      position:relative; display:block; background:var(--card);
+      border:1px solid var(--border); border-radius:16px; overflow:hidden;
+      box-shadow:0 1px 10px rgba(0,0,0,0.25);
+      transition:transform .18s ease, box-shadow .18s ease, border-color .18s ease, filter .18s ease;
+      text-decoration:none; color:inherit;
+      aspect-ratio: 4 / 3;
+      outline: none;
+    }
+    .card:hover{
+      transform:translateY(-2px);
+      box-shadow:0 10px 26px rgba(0,0,0,0.35);
+      border-color: var(--indrive);
+      filter:brightness(1.02);
+    }
+    .card:focus-visible{outline:3px solid var(--ring); outline-offset:3px}
+
+    .card img{
+      position:absolute; inset:0; width:100%; height:100%; object-fit:cover;
+      background:#0d1117; display:block;
+      filter:saturate(1.05) contrast(1.05);
+    }
+
+    .label{
+      position:absolute; left:8px; right:8px; bottom:8px;
+      display:flex; align-items:center; justify-content:space-between; gap:6px;
+      padding:8px 10px;
+      background: linear-gradient(to top, rgba(0,0,0,0.75), rgba(0,0,0,0.0));
+      border-radius:10px; color:#fff;
+    }
+    .title{
+      font-weight:800; font-size:.95rem; text-shadow:0 1px 2px rgba(0,0,0,0.45);
+    }
+    .pill{
+      font-size:.75rem; font-weight:800; padding:.25rem .55rem; border-radius:999px;
+      background: var(--indrive); color:#0b0b0b; border:1px solid rgba(0,0,0,0.2);
+    }
+
+    /* Reduce motion for users who prefer it */
+    @media (prefers-reduced-motion: reduce){
+      *{transition:none !important}
+    }
+
+    /* Optional light fallback */
+    @media (prefers-color-scheme: light){
+      :root{
+        --ink:#0b0b0b; --muted:#666; --bg:#ffffff; --card:#ffffff; --border:rgba(0,0,0,0.08);
+        --ring: rgba(192,241,28,0.45);
+      }
+      body{background:var(--bg); color:var(--ink)}
+      .card{box-shadow:0 1px 6px rgba(0,0,0,0.08)}
+      .label{background:linear-gradient(to top, rgba(0,0,0,0.70), rgba(0,0,0,0))}
+    }
+  </style>
+</head>
+<body>
+  <div class="bar" aria-hidden="true"></div>
+  <header>
+    <h1>InDrive Geoanalytics</h1>
+    <div class="hint">Choose a module</div>
+  </header>
+
+  <main>
+    <section class="grid" aria-label="Gallery menu">
+      <!-- Tile: Safety Map -->
+      <a class="card" href="Safety.html" aria-label="Open Safety Map" title="Open Safety Map">
+        <img src="safety.bmp" alt="Thumbnail for Safety Map" loading="lazy"
+             onerror="this.style.opacity='0'; this.parentElement.style.background='linear-gradient(135deg, var(--indrive), #0b0b0b)';" />
+        <div class="label">
+          <span class="title">Safety Map</span>
+          <span class="pill">Open</span>
+        </div>
+      </a>
+
+      <!-- Tile: Business Map (placeholder) -->
+      <a class="card" href="Optimisation.html" aria-label="Open Business Map" title="Open Business Map">
+        <img src="business.bmp" alt="Thumbnail for Business Map" loading="lazy"
+             onerror="this.style.opacity='0'; this.parentElement.style.background='linear-gradient(135deg, var(--indrive), #0b0b0b)';" />
+        <div class="label">
+          <span class="title">Business Map</span>
+          <span class="pill">Open</span>
+        </div>
+      </a>
+
+      <!-- Add more tiles here as modules grow -->
+    </section>
+  </main>
+</body>
+</html>

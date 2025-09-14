@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Safety Risk Map</title>
+
+  <!-- MapLibre (CSS + JS) -->
+  <link href="https://unpkg.com/maplibre-gl@3.5.2/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@3.5.2/dist/maplibre-gl.js"></script>
+
+  <!-- Exactly one deck.gl bundle (global `deck`) -->
+  <script src="https://unpkg.com/deck.gl@8.8.27/dist.min.js"></script>
+
+  <!-- Utilities -->
+  <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
+  <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+
+  <style>
+    :root{
+      --peach:#E5BA83; /* warm peach */
+      --teal:#376C8A;  /* deep teal */
+      --red:#D64550;   /* palette red */
+      --bg:#0b0f13;    /* darker app bg */
+      --panel:#12181e; /* darker side panel */
+      --text:#e6edf3;
+      --muted:#9aa4af;
+      --good:#008A3E;
+    }
+    html,body,#app{height:100%;margin:0}
+    #app{
+      display:grid;grid-template-columns:300px 1fr;
+      background:var(--bg);color:var(--text);
+      font:14px/1.4 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial
+    }
+    #sidebar{background:var(--panel);border-right:1px solid #1f2730;display:flex;flex-direction:column}
+    header{padding:14px 16px;border-bottom:1px solid #1f2730}
+    header h1{font-size:16px;margin:0 0 6px 0;font-weight:700}
+    header .sub{color:var(--muted);font-size:12px}
+    #controls{padding:12px 14px;overflow:auto}
+    .group{margin-bottom:14px}
+    .group h3{font-size:13px;margin:0 0 8px 0;color:#c7d1db}
+    label.row{display:flex;align-items:center;gap:10px;margin:8px 0}
+    label.row input[type="radio"]{accent-color:var(--teal)}
+    .hint{color:var(--muted);font-size:12px}
+    .legend{display:flex;flex-wrap:wrap;gap:6px}
+    .pill{display:inline-flex;align-items:center;gap:6px;padding:6px 8px;border-radius:10px;background:#0f151b;border:1px solid #1f2a33}
+    #map{position:relative}
+    #mapContainer{position:relative;height:100%}
+    footer{padding:10px 14px;border-top:1px solid #1f2730;color:var(--muted);font-size:12px}
+    footer a{color:var(--peach);text-decoration:none}
+
+    /* Loading overlay */
+    #loading{
+      position:fixed; inset:0; display:none;
+      align-items:center; justify-content:center;
+      background:rgba(11,15,19,0.6);
+      backdrop-filter: blur(2px);
+      z-index:9999; /* above map & UI */
+      pointer-events:all;
+    }
+    #loading .panel{
+      display:flex; align-items:center; gap:12px;
+      background:#0f151b; border:1px solid #1f2a33; border-radius:12px;
+      padding:14px 16px; box-shadow:0 10px 30px rgba(0,0,0,0.4);
+    }
+    #loading .spinner{
+      width:28px; height:28px; border-radius:50%;
+      border:3px solid #24303a; border-top-color:var(--peach);
+      animation:spin 0.9s linear infinite;
+    }
+    #loading .msg{font-weight:600; color:var(--text)}
+    @keyframes spin {to{transform:rotate(360deg)}}
+  </style>
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <header>
+      <h1>Safety Risk Map</h1>
+    </header>
+
+    <div id="controls">
+      <div class="group">
+        <h3>Choose a view</h3>
+        <label class="row"><input type="radio" name="mode" value="near40" checked>School zone high risk casualty (&gt; 40 km/h)</label>
+        <label class="row"><input type="radio" name="mode" value="res20">Residential zone high risk casualty (&gt; 20 km/h)</label>
+        <label class="row"><input type="radio" name="mode" value="over60">Speeding, high risk zone (&gt; 60 km/h)</label>
+        <!-- Cameras view -->
+        <label class="row"><input type="radio" name="mode" value="cam80">Speed camera overspeed (≤ 80 m from camera)</label>
+        <div class="hint">Only one view is visible at a time.</div>
+      </div>
+
+      <!-- Layer type toggle -->
+      <div class="group">
+        <h3>Layer type</h3>
+        <label class="row"><input type="radio" name="layertype" value="heat" checked>Heatmap</label>
+        <label class="row"><input type="radio" name="layertype" value="hex">Hexbins</label>
+        <div class="hint">Hexbins aggregate points into hexagonal cells (radius of 50 meters).</div>
+      </div>
+
+      <div class="group">
+        <h3>Legend</h3>
+        <div class="legend" id="legend">
+          <span class="pill" id="legendText">Heatmap shows density (weight by speed over threshold).</span>
+        </div>
+      </div>
+    </div>
+
+    <footer>
+      Built by ElArNa.
+    </footer>
+  </aside>
+
+  <section id="map">
+    <div id="mapContainer"></div>
+  </section>
+</div>
+
+<!-- Loading overlay -->
+<div id="loading" role="status" aria-live="polite" aria-busy="true">
+  <div class="panel">
+    <div class="spinner" aria-hidden="true"></div>
+    <div class="msg" id="loadingText">Loading…</div>
+  </div>
+</div>
+
+<script>
+(async function(){
+  // ---------- Helpers: loader & timing ----------
+  const $ = (sel)=>document.querySelector(sel);
+  const nextFrame = () => new Promise(r => requestAnimationFrame(()=>r()));
+  const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
+
+  function showLoader(msg='Loading…'){
+    const el = $('#loading');
+    const txt = $('#loadingText');
+    if (txt) txt.textContent = msg;
+    if (el) el.style.display = 'flex';
+  }
+  function hideLoader(){
+    const el = $('#loading');
+    if (el) el.style.display = 'none';
+  }
+
+  showLoader('Loading data…');
+
+  const CSV_URL_SPEED   = 'final_speed.csv';
+  const CSV_URL_SCHOOLS = 'schools_expo.csv';
+  const CSV_URL_CAMS    = 'df_cams.csv';
+  const SCHOOL_RADIUS_M = 250;
+  const CAM_RADIUS_M    = 80;
+  const HEX_RADIUS_M    = 50;
+
+  const modeInputs = document.querySelectorAll('input[name="mode"]');
+  const typeInputs = document.querySelectorAll('input[name="layertype"]');
+  const legendText = $('#legendText');
+
+  // ---- CSV loader ----
+  async function loadCSV(url){
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Failed to fetch ${url}`);
+    const text = await res.text();
+    return Papa.parse(text, {header:true, dynamicTyping:true, skipEmptyLines:true}).data;
+  }
+
+  // Strict numeric (for already-clean columns)
+  function toNum(x){ const v = Number(x); return Number.isFinite(v) ? v : null; }
+  // Robust numeric from strings like "60 km/h", "60,0", etc. (for camera limits)
+  function numFromAny(x){
+    if (x == null) return null;
+    if (typeof x === 'number') return Number.isFinite(x) ? x : null;
+    if (typeof x === 'string'){
+      const s = x.replace(',', '.');
+      const m = s.match(/-?\d+(?:\.\d+)?/);
+      return m ? Number(m[0]) : null;
+    }
+    return null;
+  }
+
+  // Load CSVs
+  const [rawSpeed, rawSchools, rawCams] = await Promise.all([
+    loadCSV(CSV_URL_SPEED),
+    loadCSV(CSV_URL_SCHOOLS),
+    loadCSV(CSV_URL_CAMS)
+  ]);
+
+  // Normalize speed points
+  const speedAll = rawSpeed.map(r=>({
+    randomized_id: r.randomized_id ?? r.rand_id ?? r.id,
+    lat: toNum(r.lat),
+    lng: toNum(r.lng),
+    spd_kmh: toNum(r.spd_kmh ?? r.spd_km_h ?? r.speed_kmh ?? r.spd),
+    highway_class: String(r.highway_class ?? '').toLowerCase().trim()
+  })).filter(d=>d.lat!=null && d.lng!=null && d.spd_kmh!=null);
+
+  // Normalize schools
+  const schools = rawSchools.map(r=>({
+    Name: r.Name ?? r.name ?? '',
+    Type: r.Type ?? r.type ?? '',
+    lat: toNum(r.lat ?? r.latitude ?? r.Latitude),
+    lng: toNum(r.lng ?? r.lon ?? r.longitude ?? r.Longitude)
+  })).filter(d=>d.lat!=null && d.lng!=null);
+
+  // Normalize cameras (robust to varying column names/units)
+  const camsRaw = rawCams.map(r=>{
+    const lat = numFromAny(r.lat ?? r.latitude ?? r.Latitude ?? r.y ?? r.Y);
+    const lng = numFromAny(r.lng ?? r.lon ?? r.longitude ?? r.Longitude ?? r.x ?? r.X);
+    const speed_limit = numFromAny(
+      r.speed_limit ?? r.limit ?? r.speedlimit ?? r.speed ?? r.maxspeed ?? r.max_speed
+    );
+    return {lat, lng, speed_limit};
+  });
+  const camsAll = camsRaw.filter(d=>d.lat!=null && d.lng!=null);
+  const camsWithLimit = camsAll.filter(d=>d.speed_limit!=null);
+
+  // ---- helpers ----
+  function computeBounds(points){
+    let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+    for (const p of points){
+      if (p.lng<minX) minX=p.lng;
+      if (p.lng>maxX) maxX=p.lng;
+      if (p.lat<minY) minY=p.lat;
+      if (p.lat>maxY) maxY=p.lat;
+    }
+    return {minX, minY, maxX, maxY};
+  }
+  function fitTo(points){
+    if (!points || !points.length) return;
+    const b = computeBounds(points);
+    map.fitBounds([[b.minX,b.minY],[b.maxX,b.maxY]], {padding: 40, duration: 0});
+  }
+
+  // turf.distance uses kilometers; convert to meters
+  function distanceMeters(ptA, ptB){
+    return turf.distance(ptA, ptB, {units:'kilometers'}) * 1000;
+  }
+  function nearestSchoolDistanceM(pt, schoolFC){
+    const nearest = turf.nearestPoint(turf.point([pt.lng, pt.lat]), schoolFC);
+    return distanceMeters(turf.point([pt.lng, pt.lat]), nearest);
+  }
+
+  // ---- dataset prep ----
+  async function prepareDatasetsAsync(){
+    showLoader('Preparing views…');
+    await nextFrame(); // yield to paint the loader before heavy loops
+
+    const schoolFC = turf.featureCollection(schools.map(s=>turf.point([s.lng, s.lat])));
+    const camFC = turf.featureCollection(
+      camsWithLimit.map(c=>turf.point([c.lng, c.lat], {speed_limit: c.speed_limit}))
+    );
+
+    // 1) within 250 m of schools & speed > 40
+    const near40 = [];
+    for (const p of speedAll){
+      if (p.spd_kmh <= 40) continue;
+      const d = nearestSchoolDistanceM(p, schoolFC);
+      if (d <= SCHOOL_RADIUS_M){
+        near40.push({...p, dist_school_m: d, weight: Math.max(0, p.spd_kmh - 40)});
+      }
+    }
+
+    // 2) residential & speed > 20
+    const res20 = [];
+    for (const p of speedAll){
+      if (p.highway_class === 'residential' && p.spd_kmh > 20){
+        res20.push({...p, weight: Math.max(0, p.spd_kmh - 20)});
+      }
+    }
+
+    // 3) speed > 60
+    const over60 = speedAll
+      .filter(p=>p.spd_kmh > 60)
+      .map(p=>({...p, weight: Math.max(0, p.spd_kmh - 60)}));
+
+    // 4) within 80 m of any camera AND spd_kmh > camera.speed_limit
+    const cam80 = [];
+    if (camsWithLimit.length){
+      for (const p of speedAll){
+        const here = turf.point([p.lng, p.lat]);
+        const nearest = turf.nearestPoint(here, camFC);
+        const dist_m = turf.distance(here, nearest, {units:'kilometers'})*1000;
+        if (dist_m <= CAM_RADIUS_M){
+          const limit = Number(nearest.properties?.speed_limit) || 0;
+          const overspeed = p.spd_kmh - limit;
+          if (overspeed > 0){
+            cam80.push({...p, dist_cam_m: dist_m, speed_limit: limit, weight: overspeed});
+          }
+        }
+      }
+    }
+
+    return {near40, res20, over60, cam80};
+  }
+
+  const {near40, res20, over60, cam80} = await prepareDatasetsAsync();
+
+  // ---- MapLibre basemap (DARK) ----
+  const centerGuess = (speedAll[0] ? [speedAll[0].lng, speedAll[0].lat]
+                      : (schools[0] ? [schools[0].lng, schools[0].lat]
+                      : (camsAll[0] ? [camsAll[0].lng, camsAll[0].lat] : [76.9,43.25])));
+
+  const map = new maplibregl.Map({
+    container: 'mapContainer',
+    style: {
+      version: 8,
+      sources: {
+        dark: {
+          type: 'raster',
+          tiles: ['https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'],
+          tileSize: 256,
+          attribution: '© OpenStreetMap contributors, © CARTO'
+        }
+      },
+      layers: [{ id: 'dark', type: 'raster', source: 'dark' }],
+      glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf'
+    },
+    center: centerGuess,
+    zoom: 11,
+    pitch: 0,
+    bearing: 0
+  });
+  map.addControl(new maplibregl.NavigationControl({visualizePitch: true}), 'top-right');
+
+  // ---- deck.gl overlay ----
+  const overlay = new deck.MapboxOverlay({interleaved: true});
+  map.addControl(overlay);
+
+  // ---- color ranges (bright yellow → bright red) ----
+  const COLOR_RANGE = [
+    [255,255,180, 10],
+    [255,255,180, 40],
+    [255,255,180,100],
+    [255,255,180,140],
+    [255,245,120,180],
+    [255,210, 70,210],
+    [255,140, 40,235],
+    [255, 40, 30,255]
+  ];
+
+  // ---- layer factories: HEATMAP ----
+  function heatLayer(id, data, radiusPixels=30, intensity=1.1){
+    return new deck.HeatmapLayer({
+      id, data,
+      getPosition: d=>[d.lng,d.lat],
+      getWeight: d=>d.weight || 1,
+      radiusPixels, intensity,
+      threshold: 0.001,               // keep small amounts visible
+      colorRange: COLOR_RANGE,
+      pickable: false
+    });
+  }
+  const heatNear40 = ()=>heatLayer('heat-near40', near40, 30, 1.1);
+  const heatRes20  = ()=>heatLayer('heat-res20',  res20,  30, 1.1);
+  const heatOver60 = ()=>heatLayer('heat-over60', over60, 32, 1.15);
+  const heatCam80  = ()=>heatLayer('heat-cam80',  cam80,  30, 1.1);
+
+  // ---- schools & buffers ----
+  function schoolsLayer(){
+    return new deck.ScatterplotLayer({
+      id: 'schools',
+      data: schools,
+      getPosition: d=>[d.lng,d.lat],
+      radiusMinPixels: 3,
+      radiusMaxPixels: 8,
+      stroked: true,
+      filled: true,
+      lineWidthMinPixels: 1,
+      getLineColor: [255,255,255,220],
+      getFillColor: [55,108,138,220],
+      pickable: false,
+      parameters: { depthTest: false }
+    });
+  }
+  function schoolBuffersLayer(){
+    return new deck.ScatterplotLayer({
+      id: 'school-buffers',
+      data: schools,
+      getPosition: d=>[d.lng,d.lat],
+      radiusUnits: 'meters',
+      getRadius: SCHOOL_RADIUS_M,
+      filled: true,
+      stroked: true,
+      lineWidthUnits: 'pixels',
+      lineWidthMinPixels: 1,
+      getFillColor: [190,200,210,40],
+      getLineColor: [170,180,190,120],
+      pickable: false,
+      parameters: { depthTest: false }
+    });
+  }
+
+  // ---- cameras & 80 m buffers ----
+  function camerasLayer(){
+    return new deck.ScatterplotLayer({
+      id: 'cameras',
+      data: camsAll,
+      getPosition: d=>[d.lng,d.lat],
+      radiusMinPixels: 3,
+      radiusMaxPixels: 7,
+      filled: true,
+      stroked: true,
+      lineWidthMinPixels: 1,
+      getFillColor: [55,108,138,220],
+      getLineColor: [255,255,255,200],
+      pickable: false,
+      parameters: { depthTest: false }
+    });
+  }
+  function cameraBuffersLayer(){
+    return new deck.ScatterplotLayer({
+      id: 'camera-buffers',
+      data: camsAll,
+      getPosition: d=>[d.lng,d.lat],
+      radiusUnits: 'meters',
+      getRadius: CAM_RADIUS_M,
+      filled: true,
+      stroked: true,
+      lineWidthUnits: 'pixels',
+      lineWidthMinPixels: 1,
+      getFillColor: [190,200,210,40],  // translucent grey
+      getLineColor: [170,180,190,120],
+      pickable: false,
+      parameters: { depthTest: false }
+    });
+  }
+
+  // ---- HEXBINS ----
+  function hexLayer(id, data){
+    return new deck.HexagonLayer({
+      id,
+      data,
+      getPosition: d=>[d.lng, d.lat],
+      radius: HEX_RADIUS_M,          // meters
+      colorAggregation: 'SUM',
+      getColorWeight: d=>d.weight || 1,
+      colorRange: COLOR_RANGE,
+      coverage: 0.9,
+      extruded: false,
+      elevationScale: 0,
+      pickable: false
+    });
+  }
+  const hexNear40 = ()=>hexLayer('hex-near40', near40);
+  const hexRes20  = ()=>hexLayer('hex-res20',  res20);
+  const hexOver60 = ()=>hexLayer('hex-over60', over60);
+  const hexCam80  = ()=>hexLayer('hex-cam80',  cam80);
+
+  // ---- switching logic ----
+  let currentMode = 'near40';
+  let currentType = 'heat'; // 'heat' | 'hex'
+
+  function layersFor(mode, type){
+    if (mode === 'near40'){
+      return (type === 'hex')
+        ? [hexNear40(), schoolBuffersLayer(), schoolsLayer()]
+        : [heatNear40(), schoolBuffersLayer(), schoolsLayer()];
+    } else if (mode === 'res20'){
+      return (type === 'hex') ? [hexRes20()] : [heatRes20()];
+    } else if (mode === 'over60'){
+      return (type === 'hex') ? [hexOver60()] : [heatOver60()];
+    } else { // cam80
+      return (type === 'hex')
+        ? [hexCam80(), cameraBuffersLayer(), camerasLayer()]
+        : [heatCam80(), cameraBuffersLayer(), camerasLayer()];
+    }
+  }
+
+  function setLegend(mode, type){
+    const base = (type === 'hex')
+      ? 'Hexbins show summed weight (speed above threshold).'
+      : 'Heatmap shows density (weight by speed over threshold).';
+    if (mode === 'near40'){
+      legendText.textContent = `${base} Grey ${SCHOOL_RADIUS_M} m rings mark school buffers.`;
+    } else if (mode === 'res20'){
+      legendText.textContent = `${base} Residential roads > 20 km/h.`;
+    } else if (mode === 'over60'){
+      legendText.textContent = `${base} All points > 60 km/h.`;
+    } else {
+      legendText.textContent = `${base} Points within ${CAM_RADIUS_M} m of a camera where speed > limit. Grey rings show 80 m camera buffers.`;
+    }
+  }
+
+  function setView(mode, type){
+    currentMode = mode;
+    currentType = type;
+    overlay.setProps({ layers: layersFor(mode, type) });
+
+    const ds = (mode === 'near40') ? (near40.length ? near40 : schools)
+             : (mode === 'res20') ? res20
+             : (mode === 'over60') ? over60
+             : (cam80.length ? cam80 : camsAll);
+    if (ds && ds.length) fitTo(ds);
+
+    setLegend(mode, type);
+  }
+
+  // Initial render (show loader while rendering)
+  map.on('load', async ()=>{
+    showLoader('Rendering map…');
+    const initialMode = document.querySelector('input[name="mode"]:checked').value;
+    const initialType = document.querySelector('input[name="layertype"]:checked').value;
+    setView(initialMode, initialType);
+    await nextFrame();
+    await sleep(250); // small grace to avoid flicker
+    hideLoader();
+  });
+
+  // Update handlers with brief loader
+  async function updateViewMode(newMode){
+    showLoader('Updating view…');
+    setView(newMode, currentType);
+    await nextFrame();
+    await sleep(150);
+    hideLoader();
+  }
+  async function updateLayerType(newType){
+    showLoader('Updating layer…');
+    setView(currentMode, newType);
+    await nextFrame();
+    await sleep(150);
+    hideLoader();
+  }
+
+  modeInputs.forEach(inp=>{
+    inp.addEventListener('change', (e)=> { updateViewMode(e.target.value); });
+  });
+  typeInputs.forEach(inp=>{
+    inp.addEventListener('change', (e)=> { updateLayerType(e.target.value); });
+  });
+})();
+</script>
+</body>
+</html>
